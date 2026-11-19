@@ -1,3 +1,4 @@
 WorkPackages/
 build/
 *.log
+__pycache__/
