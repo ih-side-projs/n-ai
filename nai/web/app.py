@@ -7,9 +7,20 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from starlette.middleware.base import BaseHTTPMiddleware
 from nai.store import Store
 from .models import ModelServerClient
 from .security import new_csrf_token, verify_bearer_or_cookie, verify_same_origin, verify_token
+
+
+class CSRFMiddleware(BaseHTTPMiddleware):
+    """Middleware to generate and attach CSRF token to request state."""
+    async def dispatch(self, request: Request, call_next):
+        # Generate CSRF token if not present
+        if not hasattr(request.state, "csrf_token"):
+            request.state.csrf_token = new_csrf_token()
+        response = await call_next(request)
+        return response
 PACKAGE_DIR = Path(__file__).resolve().parent
 TEMPLATES_DIR = PACKAGE_DIR / "templates"
 STATIC_DIR = PACKAGE_DIR / "static"
@@ -44,6 +55,10 @@ def create_app(database_path: str | Path | None = None, *, settings: WebSettings
     templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
     templates.env.filters["pretty_json"] = lambda value: __import__("json").dumps(value, indent=2, ensure_ascii=False, sort_keys=True)
     app.state.templates = templates
+
+    # Add CSRF middleware
+    app.add_middleware(CSRFMiddleware)
+
     def open_store() -> Store:
         if not settings.database_path.is_file():
             raise HTTPException(status_code=503, detail=f"N-AI database not found: {settings.database_path}")
@@ -80,4 +95,44 @@ def create_app(database_path: str | Path | None = None, *, settings: WebSettings
     def healthz(): return {"status": "ok", "database_configured": settings.database_path.is_file()}
     @app.get("/api/projects")
     def api_projects(store: Store = Depends(get_store)): return {"projects": store.list_projects()}
+    @app.get("/approvals", response_class=HTMLResponse)
+    def approvals_page(request: Request, store: Store = Depends(get_store)):
+        pending = []
+        for p in store.list_projects():
+            for n in store.list_nodes(p["id"]):
+                if n.get("status") == "awaiting_approval":
+                    pending.append({"project": p, "node": n})
+        return render(request, "approvals.html", {"pending": pending, "active_page": "approvals"})
+
+    @app.get("/escalations", response_class=HTMLResponse)
+    def escalations_page(request: Request, store: Store = Depends(get_store)):
+        escalated = []
+        for p in store.list_projects():
+            for n in store.list_nodes(p["id"]):
+                if n.get("status") in ("escalated", "failed", "blocked"):
+                    escalated.append({"project": p, "node": n})
+        return render(request, "escalations.html", {"escalated": escalated, "active_page": "escalations"})
+
+    @app.get("/tools", response_class=HTMLResponse)
+    def tools_page(request: Request, store: Store = Depends(get_store)):
+        from collections import defaultdict
+        tools = store.list_tool_defs()
+        families = defaultdict(list)
+        for t in tools:
+            families[t["family"]].append(t)
+        return render(request, "tools.html", {"families": dict(families), "active_page": "tools"})
+
+    @app.get("/models", response_class=HTMLResponse)
+    def models_page(request: Request, store: Store = Depends(get_store)):
+        # Query model_profiles table directly (no list_model_profiles method on Store)
+        rows = store.conn.execute("SELECT * FROM model_profiles ORDER BY name").fetchall()
+        profiles = [dict(row) for row in rows]
+        from .models import ModelServerClient
+        client = ModelServerClient(settings.llama_swap_url, settings.llama_swap_key)
+        try:
+            snapshot = client.get_models()
+        except Exception:
+            snapshot = {"models": [], "running": None}
+        return render(request, "models.html", {"profiles": profiles, "snapshot": snapshot, "active_page": "models"})
+
     return app

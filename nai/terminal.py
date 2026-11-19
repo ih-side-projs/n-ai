@@ -4,9 +4,11 @@ from __future__ import annotations
 import sys
 import time
 from pathlib import Path
+from typing import Callable
 
 COLORS = dict(dim="\033[2m", cyan="\033[36m", yellow="\033[33m", green="\033[32m", red="\033[31m", end="\033[0m")
 _TRANSCRIPT: Path | None = None
+_SINKS: list[Callable[[str, str, str, str | None], None]] = []
 
 
 def set_transcript(path: Path | None) -> None:
@@ -14,13 +16,32 @@ def set_transcript(path: Path | None) -> None:
     _TRANSCRIPT = Path(path) if path else None
 
 
-def log(tag: str, text: str, color: str = "dim") -> None:
+def add_sink(sink: Callable[[str, str, str, str | None], None]) -> None:
+    """Register a sink callback: sink(tag, text, color, ctx) -> None."""
+    _SINKS.append(sink)
+
+
+def remove_sink(sink: Callable[[str, str, str, str | None], None]) -> None:
+    """Unregister a sink callback."""
+    try:
+        _SINKS.remove(sink)
+    except ValueError:
+        pass
+
+
+def log(tag: str, text: str, color: str = "dim", ctx: str | None = None) -> None:
     """R1/R2: print `[tag] text` in color (KeyError for unknown colors) and append to the transcript if set."""
     line = f"[{tag}] {text}"
     print(f"{COLORS[color]}{line}{COLORS['end']}", flush=True)
     if _TRANSCRIPT:
         with open(_TRANSCRIPT, "a", encoding="utf-8") as f:
             f.write(f"{time.strftime('%H:%M:%S')} {line}\n")
+    # Also call any registered sinks
+    for sink in _SINKS:
+        try:
+            sink(tag, text, color, ctx)
+        except Exception:
+            pass  # sink errors must not break logging
 
 
 class Streamer:
