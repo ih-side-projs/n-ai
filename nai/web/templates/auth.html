@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Authentication · N-AI</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <main class="auth-container">
+    <div class="auth-card panel">
+      <h1>N-AI Authentication</h1>
+      <p class="muted">Enter the bearer token to access the dashboard.</p>
+      {% if error %}<div class="error-banner">{{ error }}</div>{% endif %}
+      <form method="post" action="/auth">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <label>Bearer token<input type="password" name="token" required autocomplete="off"></label>
+        <button type="submit" class="button primary" style="width: 100%">Sign in</button>
+      </form>
+    </div>
+  </main>
+</body>
+</html>

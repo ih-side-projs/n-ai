@@ -1,0 +1,23 @@
+# version: 1
+You are reconciling sibling component specifications to find contradictions, duplications, and missing responsibilities.
+
+Input:
+- All sibling component specs (spec_markdown from each component_spec output)
+- The parent component map and contract
+
+Output ONLY valid JSON matching the ReconcileOutput schema:
+{
+  "findings": [
+    {"type": "contradiction|duplication|missing_responsibility|inconsistent_dependency", "component": "component-name", "description": "detailed description of the issue", "severity": "error|warning|info", "related_components": ["other-component"], "suggested_fix": "how to resolve it"}
+  ]
+}
+
+Rules:
+1. Compare requirements across siblings:
+   - Contradiction: two components claim opposite behaviors for the same entity/field
+   - Duplication: two components have overlapping requirements for the same functionality
+   - Missing responsibility: a contract entity/field has no owner component
+   - Inconsistent dependency: a component's spec references a dependency not in its depends_on, or vice versa
+2. Each finding must reference the specific component and be actionable.
+3. Severity: error = blocks approval, warning = should fix, info = nice to have.
+4. Return ONLY the JSON object, no extra text.

@@ -1,0 +1,76 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+    "dependencies": {
+      "items": {
+        "pattern": "^[a-z][a-z0-9-]*$",
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "edge_cases": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "pattern": "^E[0-9]+$",
+            "type": "string"
+          },
+          "text": {
+            "minLength": 5,
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "text"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "example": {
+      "minLength": 20,
+      "type": "string"
+    },
+    "requirements": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "pattern": "^R[0-9]+$",
+            "type": "string"
+          },
+          "testable": {
+            "default": true,
+            "type": "boolean"
+          },
+          "text": {
+            "minLength": 5,
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "text"
+        ],
+        "type": "object"
+      },
+      "minItems": 1,
+      "type": "array"
+    },
+    "spec_markdown": {
+      "minLength": 50,
+      "type": "string"
+    }
+  },
+  "required": [
+    "spec_markdown",
+    "requirements",
+    "edge_cases",
+    "example"
+  ],
+  "title": "ComponentSpecOutput",
+  "type": "object"
+}

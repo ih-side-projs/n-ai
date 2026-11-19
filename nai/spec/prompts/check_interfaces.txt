@@ -1,0 +1,33 @@
+# version: 1
+You are verifying that the interface contract is complete and consistent by walking through each scenario step.
+
+Input:
+- Contract: the full contract JSON (entities, components, scenarios)
+- For each scenario step, you must name the provider component, the call, and the fields used.
+
+Output ONLY valid JSON matching the CheckInterfacesOutput schema:
+{
+  "gaps": [
+    {"scenario_id": "S1", "step_index": 0, "issue": "missing_provider|missing_consumer|missing_entity|missing_call|unused_component", "missing_element": "name of missing thing", "suggested_fix": "how to fix it"}
+  ],
+  "all_verified": false
+}
+
+Rules:
+1. For each scenario step, verify:
+   - The actor exists as a component or external input
+   - The action names a function that exists in the actor's provides (or is an external input)
+   - All fields mentioned in expects/provides exist in the relevant entity
+   - Every entity field consumed has a producer (component or external input)
+   - Every entity field produced has a consumer (component or external output)
+   - Every component appears in at least one scenario step
+   - No dependency cycles in the component graph
+2. If a gap is found, add it to the gaps array with the specific issue type.
+3. If no gaps, set all_verified: true and gaps: [].
+4. Issue types:
+   - missing_provider: a consumed field has no producing component
+   - missing_consumer: a produced field has no consuming component
+   - missing_entity: an entity referenced in a step doesn't exist in contract.entities
+   - missing_call: a step calls a function not in the component's provides
+   - unused_component: a component never appears in any scenario
+5. Return ONLY the JSON object, no extra text.

@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}Approvals{% endblock %}
+{% block content %}
+<div class="page-heading"><div><p class="eyebrow">APPROVALS INBOX</p><h1>Pending approvals</h1><p class="muted">Nodes awaiting specification approval across all projects.</p></div></div>
+
+{% if pending %}
+  <div class="stack-list">
+  {% for item in pending %}
+    <article class="panel approval-card">
+      <div class="card-heading">
+        <div><strong>{{ item.node.name }}</strong><span class="muted tiny">({{ item.node.kind }})</span></div>
+        <span class="status status-awaiting_approval">awaiting approval</span>
+      </div>
+      <p class="project-link"><a href="/projects/{{ item.project.id }}">{{ item.project.name }}</a> · <code>{{ item.node.id }}</code></p>
+      <p class="muted tiny">{{ item.node.objective or 'No objective set' }}</p>
+      <div class="approval-actions">
+        <a class="button primary" href="/projects/{{ item.project.id }}/nodes/{{ item.node.id }}">Review</a>
+        <form method="post" action="/projects/{{ item.project.id }}/nodes/{{ item.node.id }}/approve" class="inline-form">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <input type="text" name="note" placeholder="Approval note (optional)" class="small-input">
+          <button type="submit" class="button success small">Approve</button>
+        </form>
+        <form method="post" action="/projects/{{ item.project.id }}/nodes/{{ item.node.id }}/reject" class="inline-form">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <input type="text" name="note" placeholder="Rejection reason" required class="small-input">
+          <button type="submit" class="button danger small">Reject</button>
+        </form>
+      </div>
+    </article>
+  {% endfor %}
+  </div>
+{% else %}
+  <section class="empty-state panel"><div class="empty-icon">✓</div><h2>No pending approvals</h2><p>All nodes are either approved, in progress, or don't require approval.</p></section>
+{% endif %}
+{% endblock %}

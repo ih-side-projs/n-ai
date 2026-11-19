@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}{{ project.name }} · Artifacts{% endblock %}
+{% block content %}
+<div class="breadcrumbs"><a href="/">Projects</a><span>/</span><a href="/projects/{{ project.id }}">{{ project.name }}</a><span>/</span>Artifacts</div>
+<div class="page-heading"><div><p class="eyebrow">ARTIFACTS</p><h1>{{ project.name }}</h1></div></div>
+
+<div class="content-grid">
+  <section class="panel span-two">
+    <h2>Registered artifacts</h2>
+    {% if artifacts %}
+      <div class="table-wrap"><table><thead><tr><th>Path</th><th>Kind</th><th>SHA1</th><th>Node</th><th>Actions</th></tr></thead><tbody>
+      {% for a in artifacts %}<tr><td><code>{{ a.path }}</code></td><td>{{ a.kind }}</td><td><code class="hash">{{ a.sha1[:12] }}</code></td><td>{% if a.node_id %}<a href="/projects/{{ project.id }}/nodes/{{ a.node_id }}">{{ a.node_id[:8] }}</a>{% else %}—{% endif %}</td><td><a href="/projects/{{ project.id }}/artifacts/{{ a.id }}">View</a> | <a href="/projects/{{ project.id }}/artifacts/{{ a.id }}?download=true">Download</a></td></tr>{% endfor %}
+      </tbody></table></div>
+    {% else %}<p class="muted">No artifacts registered.</p>{% endif %}
+  </section>
+  <aside class="panel">
+    <h2>Workspace files</h2>
+    {% if files %}
+      <ul class="file-list">
+      {% for f in files %}<li><a href="/projects/{{ project.id }}/files/{{ f.path }}">{{ f.path }}</a><span class="tiny muted">{{ f.size }} bytes</span></li>{% endfor %}
+      </ul>
+    {% else %}<p class="muted">No workspace files found.</p>{% endif %}
+  </aside>
+</div>
+{% endblock %}

@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}{{ node.name }}{% endblock %}
+{% block content %}
+<div class="breadcrumbs"><a href="/">Projects</a><span>/</span><a href="/projects/{{ project.id }}">{{ project.name }}</a><span>/</span>{{ node.name }}</div>
+<div class="page-heading"><div><p class="eyebrow">NODE · {{ node.kind }}</p><h1>{{ node.name }}</h1><p class="muted">{{ node.id }}</p></div><span class="status status-{{ node.status }}">{{ node.status }}</span></div>
+<div class="content-grid">
+  <section class="panel span-two"><h2>Specification</h2><div class="markdown-body">{{ spec_html|safe }}</div></section>
+  <aside class="panel"><h2>Node details</h2><dl class="compact-dl"><div><dt>Objective</dt><dd>{{ node.objective or '—' }}</dd></div><div><dt>Attempts</dt><dd>{{ node.attempts }}</dd></div><div><dt>Test command</dt><dd><code>{{ node.test_command or '—' }}</code></dd></div><div><dt>Content hash</dt><dd><code class="hash">{{ node.content_hash or '—' }}</code></dd></div><div><dt>Built hash</dt><dd><code class="hash">{{ node.built_hash or '—' }}</code></dd></div><div><dt>Dependencies</dt><dd>{% for dep in node.depends_on %}<code>{{ dep }}</code>{% else %}—{% endfor %}</dd></div></dl></aside>
+  <section class="panel span-two"><h2>Contract</h2><pre class="code-block"><code>{{ node.contract|pretty_json }}</code></pre></section>
+  <section class="panel span-two"><h2>Requirements and Test Traceability</h2>
+    {% if traceability %}<div class="table-wrap"><table><thead><tr><th>Requirement</th><th>Test file(s)</th><th>Last result</th><th>Frozen hash</th></tr></thead><tbody>
+    {% for row in traceability %}<tr><td><strong>{{ row.requirement.id }}</strong><p class="tiny muted">{{ row.requirement.text }}</p></td><td>{% for test in row.tests %}<div>{{ test.file_path }}</div>{% else %}<span class="status status-failed">uncovered</span>{% endfor %}</td><td>{% for test in row.tests %}<span class="status status-{{ test.last_result }}">{{ test.last_result }}</span>{% else %}—{% endfor %}</td><td>{% for test in row.tests %}<code class="hash">{{ test.frozen_hash }}</code>{% else %}—{% endfor %}</td></tr>{% endfor %}
+    </tbody></table></div>{% else %}<p class="muted">No requirement records are available for this node.</p>{% endif %}
+  </section>
+  <section class="panel"><h2>Jobs and attempts</h2>{% if jobs %}<div class="stack-list">{% for job in jobs|reverse %}<article><div class="card-heading"><strong>{{ job.kind }}</strong><span class="status status-{{ job.status }}">{{ job.status }}</span></div><p class="tiny muted">{{ job.model_role }} · attempt {{ job.attempt }} · {{ job.id }}</p><p class="tiny">{{ job.tokens_in or 0 }} in / {{ job.tokens_out or 0 }} out tokens</p>{% if job.error %}<pre class="error-output">{{ job.error }}</pre>{% endif %}</article>{% endfor %}</div>{% else %}<p class="muted">No jobs recorded.</p>{% endif %}</section>
+  <section class="panel"><h2>Artifacts</h2>{% if artifacts %}<ul class="plain-list">{% for artifact in artifacts %}<li><a href="/projects/{{ project.id }}/artifacts/{{ artifact.id }}">{{ artifact.path }}</a><span class="tiny muted">{{ artifact.kind }} · {{ artifact.sha1[:10] }}</span></li>{% endfor %}</ul>{% else %}<p class="muted">No node artifacts recorded.</p>{% endif %}</section>
+</div>
+<aside class="panel node-actions">
+  <h2>Actions</h2>
+  <a class="button primary" href="/projects/{{ project.id }}/nodes/{{ node.id }}/edit">Edit spec</a>
+  {% if node.status in ('draft', 'awaiting_approval') %}
+    <form method="post" action="/projects/{{ project.id }}/nodes/{{ node.id }}/approve" class="inline-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="text" name="note" placeholder="Approval note (optional)">
+      <button type="submit" class="button success">Approve</button>
+    </form>
+    <form method="post" action="/projects/{{ project.id }}/nodes/{{ node.id }}/reject" class="inline-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="text" name="note" placeholder="Rejection reason (required)" required>
+      <button type="submit" class="button danger">Reject</button>
+    </form>
+  {% endif %}
+  {% if node.status in ('failed', 'escalated') %}
+    <form method="post" action="/projects/{{ project.id }}/nodes/{{ node.id }}/retry" class="inline-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <button type="submit" class="button warning">Retry</button>
+    </form>
+  {% endif %}
+  {% if node.status != 'done' %}
+    <form method="post" action="/projects/{{ project.id }}/nodes/{{ node.id }}/rerun_stage" class="inline-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <select name="stage" required><option value="spec">Spec writing</option><option value="build">Build</option><option value="test">Test</option><option value="verify">Verify</option></select>
+      <button type="submit" class="button secondary">Re-run stage</button>
+    </form>
+    <form method="post" action="/projects/{{ project.id }}/nodes/{{ node.id }}/mark_stale" class="inline-form" onsubmit="return confirm('Mark this node as stale?')">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="text" name="note" placeholder="Reason (optional)">
+      <button type="submit" class="button ghost">Mark stale</button>
+    </form>
+  {% endif %}
+</aside>
+{% endblock %}

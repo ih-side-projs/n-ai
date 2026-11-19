@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}Models{% endblock %}
+{% block content %}
+<div class="page-heading"><div><p class="eyebrow">MODELS</p><h1>Model configuration</h1><p class="muted">Manage ModelProfiles and test the local model server.</p></div></div>
+
+<div class="content-grid">
+  <section class="panel span-two">
+    <h2>ModelProfiles</h2>
+    {% if profiles %}
+      <div class="table-wrap"><table><thead><tr><th>Name</th><th>Reasoner</th><th>Coder</th><th>Swap cost</th></tr></thead><tbody>
+      {% for p in profiles %}<tr><td><strong>{{ p.name }}</strong></td><td>{{ p.reasoner }}</td><td>{{ p.coder }}</td><td>{{ p.swap_cost_seconds or '—' }}s</td></tr>{% endfor %}
+      </tbody></table></div>
+    {% else %}<p class="muted">No ModelProfiles configured.</p>{% endif %}
+  </section>
+  <aside class="panel">
+    <h2>Server status</h2>
+    {% if snapshot.models %}<p class="status status-success">Connected</p><span class="tiny muted">{{ snapshot.models|length }} models available</span>
+    {% else %}<p class="status status-warning">No models listed</p>{% endif %}
+    {% if snapshot.running %}<p class="tiny muted">Currently running: {{ snapshot.running }}</p>{% endif %}
+  </aside>
+</div>
+
+<div class="content-grid">
+  <section class="panel span-two">
+    <h2>Smoke test</h2>
+    <form method="post" action="/models/smoke-test" class="smoke-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <select name="model_id" required>
+        <option value="">Select model</option>
+        {% for m in snapshot.models %}<option value="{{ m.id }}">{{ m.id }}</option>{% endfor %}
+      </select>
+      <button type="submit" class="button primary">Run smoke test</button>
+    </form>
+    {% if smoke_result %}
+    <div class="smoke-result {% if smoke_result.ok %}success{% else %}error{% endif %}">
+      <h3>{% if smoke_result.ok %}✓ Success{% else %}✗ Failed{% endif %}</h3>
+      <p class="muted">{{ smoke_result.model_id }}</p>
+      {% if smoke_result.error %}<pre class="error-output">{{ smoke_result.error }}</pre>{% endif %}
+      {% if smoke_result.latency_ms %}<p class="muted">Latency: {{ smoke_result.latency_ms }}ms</p>{% endif %}
+    </div>
+    {% endif %}
+  </section>
+</div>
+{% endblock %}

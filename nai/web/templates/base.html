@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>{% block title %}N-AI{% endblock %} · N-AI</title>
+  <link rel="stylesheet" href="/static/app.css">
+  <script defer src="/static/app.js"></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="N-AI dashboard">N-AI <span>local project console</span></a>
+    <nav aria-label="Main navigation">
+      <a href="/" {% if active_page == 'projects' %}aria-current="page"{% endif %}>Projects</a>
+      <a href="/approvals" {% if active_page == 'approvals' %}aria-current="page"{% endif %}>Approvals</a>
+      <a href="/escalations" {% if active_page == 'escalations' %}aria-current="page"{% endif %}>Escalations</a>
+      <a href="/tools" {% if active_page == 'tools' %}aria-current="page"{% endif %}>Tools</a>
+      <a href="/models" {% if active_page == 'models' %}aria-current="page"{% endif %}>Models</a>
+      {% if project %}
+        <a href="/projects/{{ project.id }}/metrics" {% if active_page == 'metrics' %}aria-current="page"{% endif %}>Metrics</a>
+        <a href="/projects/{{ project.id }}/logs" {% if active_page == 'logs' %}aria-current="page"{% endif %}>Logs</a>
+        <a href="/projects/{{ project.id }}/artifacts" {% if active_page == 'artifacts' %}aria-current="page"{% endif %}>Artifacts</a>
+      {% endif %}
+    </nav>
+    <span class="local-badge">LOCAL</span>
+  </header>
+  <main id="main" class="container">
+    {% block content %}{% endblock %}
+  </main>
+  <footer class="footer">
+    <span>N-AI · local-first project workspace</span>
+    <span>Full control dashboard · state changes via command queue</span>
+  </footer>
+</body>
+</html>

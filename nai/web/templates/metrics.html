@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}{{ project.name }} · Metrics{% endblock %}
+{% block content %}
+<div class="breadcrumbs"><a href="/">Projects</a><span>/</span><a href="/projects/{{ project.id }}">{{ project.name }}</a><span>/</span>Metrics</div>
+<div class="page-heading"><div><p class="eyebrow">METRICS</p><h1>{{ project.name }}</h1></div></div>
+
+{% if metrics %}
+<div class="metrics-grid">
+  <section class="panel"><h2>Token usage</h2><p class="metric-value">{{ metrics.total_tokens }}</p><span class="muted">Total tokens</span></section>
+  <section class="panel"><h2>Wall time</h2><p class="metric-value">{{ metrics.total_duration|duration }}</p><span class="muted">Total time</span></section>
+  <section class="panel"><h2>Success rate</h2><p class="metric-value">{{ metrics.success_rate }}%</p><span class="muted">{{ metrics.completed }}/{{ metrics.total }} completed</span></section>
+  <section class="panel"><h2>Avg retries</h2><p class="metric-value">{{ metrics.avg_retries }}</p><span class="muted">Per node</span></section>
+</div>
+
+<section class="panel"><h2>By node kind</h2>
+  <div class="table-wrap"><table><thead><tr><th>Kind</th><th>Total</th><th>Done</th><th>Failed</th><th>Running</th><th>Tokens</th><th>Avg duration</th><th>Success %</th></tr></thead><tbody>
+  {% for row in metrics.by_kind %}<tr><td><code>{{ row.kind }}</code></td><td>{{ row.total }}</td><td>{{ row.done }}</td><td>{{ row.failed }}</td><td>{{ row.running }}</td><td>{{ row.tokens }}</td><td>{{ row.avg_duration|duration }}</td><td>{{ row.success_rate }}%</td></tr>{% endfor %}
+  </tbody></table></div>
+</section>
+
+<section class="panel"><h2>By model role</h2>
+  <div class="table-wrap"><table><thead><tr><th>Role</th><th>Jobs</th><th>Tokens in</th><th>Tokens out</th><th>Avg duration</th></tr></thead><tbody>
+  {% for row in metrics.by_role %}<tr><td>{{ row.role }}</td><td>{{ row.jobs }}</td><td>{{ row.tokens_in }}</td><td>{{ row.tokens_out }}</td><td>{{ row.avg_duration|duration }}</td></tr>{% endfor %}
+  </tbody></table></div>
+</section>
+
+<section class="panel"><h2>Daily trend</h2>
+  <div class="table-wrap"><table><thead><tr><th>Date</th><th>Jobs</th><th>Tokens</th><th>Duration</th></tr></thead><tbody>
+  {% for row in metrics.daily %}<tr><td>{{ row.date }}</td><td>{{ row.jobs }}</td><td>{{ row.tokens }}</td><td>{{ row.duration|duration }}</td></tr>{% endfor %}
+  </tbody></table></div>
+</section>
+{% else %}
+<section class="empty-state panel"><div class="empty-icon">📊</div><h2>No metrics available</h2><p>Metrics will appear once jobs have been executed.</p></section>
+{% endif %}
+{% endblock %}

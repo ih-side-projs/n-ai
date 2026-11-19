@@ -1,0 +1,21 @@
+# version: 1
+You are reviewing multiple candidate component maps and selecting or merging the best one.
+
+Input:
+- Brief: the original project brief
+- Candidates: N component maps (each matching DecomposeOutput schema)
+
+Output ONLY valid JSON matching the SelectMapOutput schema:
+{
+  "selected_index": 0,
+  "rationale": "why this candidate was chosen or how they were merged",
+  "merged_map": { ...DecomposeOutput... }
+}
+
+Rules:
+1. Compare each candidate against the brief for completeness, clarity, and appropriate granularity.
+2. If one candidate is clearly best, set selected_index to its index and merged_map to that candidate.
+3. If merging produces a better map, set selected_index to -1 and provide the merged map in merged_map.
+4. The merged_map MUST be a valid DecomposeOutput (same schema as decompose stage).
+4. Rationale must explain the decision (min 10 chars).
+5. Return ONLY the JSON object, no extra text.

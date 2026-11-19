@@ -1,0 +1,21 @@
+{% macro render_nodes(nodes, project_id) %}
+<ul class="spec-tree">
+  {% for node in nodes %}
+  <li class="tree-node">
+    <details {% if node.children %}open{% endif %}>
+      <summary class="tree-summary">
+        <span class="tree-icon">▸</span>
+        <a href="/projects/{{ project_id }}/nodes/{{ node.id }}"><strong>{{ node.name }}</strong></a>
+        <span class="status status-{{ node.status }}">{{ node.status }}</span>
+        {% if node.subtree_counts %}
+        <span class="subtree-counts">
+          {% for status, count in node.subtree_counts|dictsort %}<span class="count-pill">{{ status }} <b>{{ count }}</b></span>{% endfor %}
+        </span>
+        {% endif %}
+      </summary>
+      {% if node.children %}{{ render_nodes(node.children, project_id) }}{% endif %}
+    </details>
+  </li>
+  {% endfor %}
+</ul>
+{% endmacro %}

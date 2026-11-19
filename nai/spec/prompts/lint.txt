@@ -1,0 +1,18 @@
+# version: 1
+# SPEC-4 Spec Lint (code-only, no model call)
+# This file documents the lint checks performed by nai.spec.checkers.lint_spec()
+
+Checks (Python port of decomposable-spec validator):
+1. Structure and headings: each component spec has required sections (Purpose, Interface, Requirements, Edge Cases, Example, Dependencies)
+2. Unique IDs: all R1..Rn and E1..En are unique within the spec
+3. Vague wording detection: flags 'fast', 'robust', 'handles errors', 'efficient', 'scalable', 'secure', 'user-friendly', 'intuitive', 'seamless' in requirements
+4. Dependency names exist: every dependency in ## Dependencies matches a sibling component name
+5. No cycles: dependency graph among siblings is acyclic
+6. Component mentions only listed dependencies: spec text doesn't reference undeclared components
+7. Requirement and function counts within X9 limits (default: max 20 requirements, max 15 functions per component)
+8. At least one example per component (## Example section non-empty)
+9. Contract consistency: spec's interface section matches the frozen contract for this component
+10. Scenario coverage: every component appears in at least one parent scenario
+
+Run: python -m nai.spec.checkers <spec_file_or_dir>
+Returns: list of findings with file, line, severity, message

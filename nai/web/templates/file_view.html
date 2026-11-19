@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}{{ filename }}{% endblock %}
+{% block content %}
+<div class="breadcrumbs"><a href="/">Projects</a><span>/</span><a href="/projects/{{ project.id }}">{{ project.name }}</a><span>/</span>{{ filename }}</div>
+<div class="page-heading"><div><p class="eyebrow">FILE VIEW</p><h1>{{ filename }}</h1><p class="muted path-text">{{ relative_path }}</p></div></div>
+
+<div class="file-actions">
+  <a href="{{ download_url }}" class="button secondary">Download</a>
+  <a href="/projects/{{ project.id }}/artifacts" class="button ghost">Back to artifacts</a>
+</div>
+
+{% if markdown_html %}
+  <article class="markdown-body">{{ markdown_html|safe }}</article>
+{% else %}
+  <pre class="code-block">{{ content }}</pre>
+{% endif %}
+{% endblock %}

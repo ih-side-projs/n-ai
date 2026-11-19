@@ -1,0 +1,49 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nai"
+version = "2.0.0.dev0"
+description = "nai (N-AI): local-first spec-to-code system with web interface and evaluation harness"
+requires-python = ">=3.10"
+dependencies = [
+    "openai>=1.40",
+    "tomli>=2; python_version < '3.11'",
+    "fastapi>=0.115",
+    "jinja2>=3.1",
+    "mistune>=3.0",
+    "bleach>=6.0",
+    "httpx>=0.27",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-asyncio>=0.23", "httpx>=0.27"]
+web = ["fastapi>=0.115", "jinja2>=3.1", "mistune>=3.0", "bleach>=6.0", "httpx>=0.27", "uvicorn>=0.30"]
+tools = []
+eval = ["pydantic>=2.0"]
+# Optional tool families
+markdown = ["markdown>=3.5"]
+excel = ["openpyxl>=3.1"]
+word = ["python-docx>=1.1"]
+pdf = ["pypdf>=3.0", "reportlab>=4.0"]
+charts = ["matplotlib>=3.7"]
+
+[project.scripts]
+nai = "nai.cli:main"
+nai-web = "nai.web.server:main"
+nai-mcp = "nai.tools.cli:mcp_main"
+nai-bench = "nai.eval.cli:bench_main"
+
+[tool.setuptools.packages.find]
+include = ["nai*"]
+
+[tool.setuptools.package-data]
+"nai.prompts" = ["*.txt"]
+"nai.web.templates" = ["*.html"]
+"nai.web.static" = ["*.css", "*.js"]
+"nai.spec.prompts" = ["*.txt"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

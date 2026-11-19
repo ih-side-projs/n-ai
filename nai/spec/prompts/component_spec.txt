@@ -1,0 +1,30 @@
+# version: 1
+You are writing a detailed component specification from its objective and the interfaces it touches.
+
+Input:
+- Component name and objective (from the approved component map)
+- Shared entities it uses (subset of contract.entities)
+- Interface functions it provides and consumes (from contract.components)
+- Dependencies (from component map depends_on)
+- Target stack and size limits
+
+Output ONLY valid JSON matching the ComponentSpecOutput schema:
+{
+  "spec_markdown": "# Component: name\n\n## Purpose\n...\n\n## Interface\n...\n\n## Requirements\n- R1: ...\n- R2: ...\n\n## Edge Cases\n- E1: ...\n\n## Example\n...\n\n## Dependencies\n- dep1\n- dep2",
+  "requirements": [{"id": "R1", "text": "requirement text", "testable": true}],
+  "edge_cases": [{"id": "E1", "text": "edge case text"}],
+  "example": "A concrete input/output example showing the component's behavior",
+  "dependencies": ["dep1", "dep2"]
+}
+
+Rules:
+1. The spec_markdown follows the decomposable-spec convention:
+   - Heading: `# Component: <name>`
+   - Sections: `## Purpose`, `## Interface`, `## Requirements`, `## Edge Cases`, `## Example`, `## Dependencies`
+   - Requirements: `- R1:`, `- R2:` etc. (testable, specific, verifiable)
+   - Edge Cases: `- E1:`, `- E2:` etc.
+   - At least one exact example with concrete inputs/outputs
+2. Requirements must be testable (each maps to at least one test case).
+3. Only list dependencies from the approved depends_on.
+4. The interface section summarizes the provides/consumes from the contract.
+5. Return ONLY the JSON object, no extra text.

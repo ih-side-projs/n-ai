@@ -1,0 +1,49 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+    "questions": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "category": {
+            "enum": [
+              "language",
+              "dependencies",
+              "scope",
+              "interfaces",
+              "nonfunctional",
+              "other"
+            ],
+            "type": "string"
+          },
+          "default_answer": {
+            "type": "string"
+          },
+          "id": {
+            "pattern": "^Q[0-9]+$",
+            "type": "string"
+          },
+          "question": {
+            "minLength": 10,
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "question",
+          "default_answer",
+          "category"
+        ],
+        "type": "object"
+      },
+      "maxItems": 5,
+      "type": "array"
+    }
+  },
+  "required": [
+    "questions"
+  ],
+  "title": "ClarifyOutput",
+  "type": "object"
+}

@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}{{ node.name }} · Edit{% endblock %}
+{% block content %}
+<div class="breadcrumbs"><a href="/">Projects</a><span>/</span><a href="/projects/{{ project.id }}">{{ project.name }}</a><span>/</span>{{ node.name }}</div>
+<div class="page-heading"><div><p class="eyebrow">NODE · {{ node.kind }}</p><h1>{{ node.name }}</h1><p class="muted">{{ node.id }}</p></div><span class="status status-{{ node.status }}">{{ node.status }}</span></div>
+
+<div class="content-grid">
+  <section class="panel span-two">
+    <h2>Edit Specification</h2>
+    <p class="muted">Edit the specification text below. Changes will be tracked and can be reviewed.</p>
+    <form method="post" action="/projects/{{ project.id }}/nodes/{{ node.id }}/edit" class="spec-edit-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <textarea name="spec_text" class="spec-textarea" rows="30" spellcheck="false">{{ current_spec }}</textarea>
+      <div class="form-actions">
+        <button type="submit" class="button primary">Save changes</button>
+        <a href="/projects/{{ project.id }}/nodes/{{ node.id }}" class="button secondary">Cancel</a>
+      </div>
+    </form>
+  </section>
+
+  {% if diff %}
+  <aside class="panel">
+    <h2>Diff against last approved</h2>
+    <p class="muted tiny">Showing changes from the last approved version.</p>
+    <div class="diff-view">
+      {% for line in diff %}
+        {% if line.type == 'meta' %}<div class="diff-meta">{{ line.text }}</div>
+        {% elif line.type == 'delete' %}<div class="diff-del">{{ line.text }}</div>
+        {% elif line.type == 'insert' %}<div class="diff-ins">{{ line.text }}</div>
+        {% else %}<div class="diff-eq">{{ line.text }}</div>
+        {% endif %}
+      {% endfor %}
+    </div>
+  </aside>
+  {% elif approved_spec %}
+  <aside class="panel">
+    <h2>Last approved version</h2>
+    <p class="muted tiny">No changes detected since last approval.</p>
+    <pre class="code-block">{{ approved_spec }}</pre>
+  </aside>
+  {% else %}
+  <aside class="panel">
+    <h2>No approved version</h2>
+    <p class="muted">This node has not been approved yet. The diff will appear after the first approval.</p>
+  </aside>
+  {% endif %}
+</div>
+{% endblock %}

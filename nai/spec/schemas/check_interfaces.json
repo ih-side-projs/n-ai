@@ -1,0 +1,54 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+    "all_verified": {
+      "type": "boolean"
+    },
+    "gaps": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "issue": {
+            "enum": [
+              "missing_provider",
+              "missing_consumer",
+              "missing_entity",
+              "missing_call",
+              "unused_component"
+            ],
+            "type": "string"
+          },
+          "missing_element": {
+            "type": "string"
+          },
+          "scenario_id": {
+            "pattern": "^S[0-9]+$",
+            "type": "string"
+          },
+          "step_index": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "suggested_fix": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "scenario_id",
+          "step_index",
+          "issue",
+          "missing_element"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "gaps",
+    "all_verified"
+  ],
+  "title": "CheckInterfacesOutput",
+  "type": "object"
+}

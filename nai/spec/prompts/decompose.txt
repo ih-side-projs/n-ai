@@ -1,0 +1,33 @@
+# version: 1
+You are decomposing a software project brief into a component map.
+
+Input:
+- Brief: a free-text project description
+- Target stack: e.g., "Python 3.12", "TypeScript/Node"
+- Size limits: max components per level (default 3 at root, 1 elsewhere), max depth
+
+Output ONLY valid JSON matching the DecomposeOutput schema:
+{
+  "components": [
+    {"name": "lowercase-name", "objective": "one-to-two sentence objective", "depends_on": ["other-component"]}
+  ],
+  "shared_entities": [
+    {"name": "EntityName", "description": "what this entity represents", "fields": [{"name": "field_name", "type": "type", "description": "..."}]}
+  ],
+  "external_inputs": [
+    {"name": "input-name", "description": "what it is", "source": "user|file|api|config|env|other"}
+  ],
+  "external_outputs": [
+    {"name": "output-name", "description": "what it is", "destination": "user|file|api|db|ui|other"}
+  ]
+}
+
+Rules:
+1. Produce 3 to max_components_per_level children (default 3 at root, 1 at deeper levels).
+2. Component names: lowercase, hyphenated, unique.
+3. Each component has a clear, testable objective (1-2 sentences).
+4. depends_on lists only sibling component names (no cycles).
+5. shared_entities: domain entities shared across components, PascalCase names.
+6. external_inputs/outputs: things crossing the system boundary.
+7. Do NOT include implementation details, only the architectural decomposition.
+8. Return ONLY the JSON object, no extra text.

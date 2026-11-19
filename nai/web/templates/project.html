@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% from "_tree.html" import render_nodes %}
+{% block title %}{{ project.name }}{% endblock %}
+{% block content %}
+<div class="breadcrumbs"><a href="/">Projects</a><span>/</span>{{ project.name }}</div>
+<div class="page-heading">
+  <div><p class="eyebrow">PROJECT OVERVIEW</p><h1>{{ project.name }}</h1><p class="muted">{{ project.id }} · {{ project.status }}</p></div>
+  <span class="status status-{{ project.status }}">{{ project.status }}</span>
+</div>
+<section class="summary-grid">
+  <article class="panel metric-card"><span class="metric-label">Completion</span><strong class="metric-value">{{ project.percent_done }}%</strong><div class="progress-line" role="progressbar" aria-label="Project completion" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{ project.percent_done }}"><span style="width: {{ project.percent_done }}%"></span></div><span class="tiny muted">{{ project.node_counts.get('done', 0) }} of {{ project.node_count }} nodes done</span></article>
+  <article class="panel metric-card"><span class="metric-label">Node status</span><strong class="metric-value">{{ project.node_count }}</strong><span class="tiny muted">{{ project.node_counts.get('running', 0) }} running · {{ project.node_counts.get('failed', 0) }} failed</span></article>
+  <article class="panel metric-card"><span class="metric-label">Budget used</span><strong class="metric-value">{{ project.tokens_used }}</strong><span class="tiny muted">tokens recorded{% if project.budget_limit_tokens %} / {{ project.budget_limit_tokens }} budget ({{ project.budget_percent }}% used){% else %} · no aggregate token cap configured{% endif %}</span></article>
+  <article class="panel metric-card"><span class="metric-label">Runner</span><strong class="metric-value runner-{{ runner.status|default('unknown') }}">{{ runner.status|default('unknown') }}</strong><span class="tiny muted">{{ runner.message|default('') }}</span><span class="tiny muted">{% if runner.loaded_model %}Loaded: {{ runner.loaded_model }} · {% endif %}{% if runner.queue_depth %}Queue: {{ runner.queue_depth }} · {% endif %}Heartbeat: {{ runner.heartbeat_at|default('not reported') }}</span></article>
+</section>
+<div class="content-grid">
+  <section class="panel span-two">
+    <div class="section-heading"><div><h2>Specification tree</h2><p class="muted">Expand nodes to inspect their children and subtree counts.</p></div><span class="tiny muted">{{ project.node_count }} nodes</span></div>
+    {% if tree %}{{ render_nodes(tree, project.id) }}{% else %}<p class="muted">No specification nodes have been created yet.</p>{% endif %}
+  </section>
+  <aside class="panel">
+    <h2>Runtime</h2>
+    {% if project.current_job %}<p><span class="status status-running">running</span> {{ project.current_job.kind }}</p><p class="muted tiny">{{ project.current_job.id }}</p>{% else %}<p class="muted">No current job is recorded.</p>{% endif %}
+    <dl class="compact-dl"><div><dt>Jobs</dt><dd>{{ project.job_count }}</dd></div><div><dt>Last activity</dt><dd>{% if project.last_activity %}{{ project.last_activity.time }}{% else %}—{% endif %}</dd></div><div><dt>Workspace</dt><dd class="path-text">{{ project.workspace_path }}</dd></div></dl>
+    <div class="link-stack"><a href="/projects/{{ project.id }}/logs">Live log →</a><a href="/projects/{{ project.id }}/metrics">Metrics →</a><a href="/projects/{{ project.id }}/artifacts">Artifacts →</a></div>
+    <h2>Controls</h2>
+    <div class="button-group">
+      <form method="post" action="/projects/{{ project.id }}/control/pause" class="inline-form"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit" class="button secondary" {% if runner.status == 'paused' %}disabled{% endif %}>Pause</button></form>
+      <form method="post" action="/projects/{{ project.id }}/control/resume" class="inline-form"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit" class="button secondary" {% if runner.status != 'paused' %}disabled{% endif %}>Resume</button></form>
+      <form method="post" action="/projects/{{ project.id }}/control/cancel" class="inline-form" onsubmit="return confirm('Cancel all work on this project?')"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit" class="button danger">Cancel</button></form>
+    </div>
+  </aside>
+</div>
+{% endblock %}

@@ -1,0 +1,60 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+    "findings": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "component": {
+            "pattern": "^[a-z][a-z0-9-]*$",
+            "type": "string"
+          },
+          "description": {
+            "minLength": 10,
+            "type": "string"
+          },
+          "related_components": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "severity": {
+            "enum": [
+              "error",
+              "warning",
+              "info"
+            ],
+            "type": "string"
+          },
+          "suggested_fix": {
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "contradiction",
+              "duplication",
+              "missing_responsibility",
+              "inconsistent_dependency"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "component",
+          "description",
+          "severity"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "findings"
+  ],
+  "title": "ReconcileOutput",
+  "type": "object"
+}

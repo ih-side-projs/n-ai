@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}Escalations{% endblock %}
+{% block content %}
+<div class="page-heading"><div><p class="eyebrow">ESCALATION INBOX</p><h1>Escalated items</h1><p class="muted">Nodes that have been escalated or failed and need attention.</p></div></div>
+
+{% if escalated %}
+  <div class="stack-list">
+  {% for item in escalated %}
+    <article class="panel escalation-card">
+      <div class="card-heading">
+        <div><strong>{{ item.node.name }}</strong><span class="muted tiny">({{ item.node.kind }})</span></div>
+        <span class="status status-{{ item.node.status }}">{{ item.node.status }}</span>
+      </div>
+      <p class="project-link"><a href="/projects/{{ item.project.id }}">{{ item.project.name }}</a> · <code>{{ item.node.id }}</code></p>
+      <p class="muted tiny">{{ item.node.objective or 'No objective set' }}</p>
+      <div class="escalation-actions">
+        <a class="button primary" href="/projects/{{ item.project.id }}/nodes/{{ item.node.id }}">Inspect</a>
+        {% if item.node.status == 'failed' %}
+          <form method="post" action="/projects/{{ item.project.id }}/nodes/{{ item.node.id }}/retry" class="inline-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button type="submit" class="button warning small">Retry</button>
+          </form>
+        {% endif %}
+        <form method="post" action="/projects/{{ item.project.id }}/nodes/{{ item.node.id }}/mark_stale" class="inline-form">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <input type="text" name="note" placeholder="Reason for marking stale" class="small-input">
+          <button type="submit" class="button ghost small">Mark stale</button>
+        </form>
+      </div>
+    </article>
+  {% endfor %}
+  </div>
+{% else %}
+  <section class="empty-state panel"><div class="empty-icon">⚠</div><h2>No escalations</h2><p>No nodes currently require escalation attention.</p></section>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% block title %}Tools{% endblock %}
+{% block content %}
+<div class="page-heading"><div><p class="eyebrow">TOOL REGISTRY</p><h1>Available tools</h1><p class="muted">Browse the tool catalog, view schemas, and try tools in the sandbox.</p></div></div>
+
+{% if families %}
+  {% for family_name, tools in families|dictsort %}
+  <section class="panel tool-family">
+    <h2>{{ family_name }}</h2>
+    <div class="tool-grid">
+    {% for tool in tools %}
+      <article class="panel tool-card">
+        <div class="tool-header"><strong>{{ tool.name }}</strong><span class="tool-badge">{{ tool.family }}</span></div>
+        <p class="tool-desc">{{ tool.description }}</p>
+        <dl class="compact-dl">
+          <div><dt>Side effects</dt><dd><span class="status status-{{ 'warning' if tool.side_effects else 'success' }}">{{ 'yes' if tool.side_effects else 'no' }}</span></dd></div>
+          <div><dt>Timeout</dt><dd>{{ tool.timeout_seconds }}s</dd></div>
+        </dl>
+        <details class="tool-schema">
+          <summary>JSON Schema</summary>
+          <pre class="code-block">{{ tool.parameters|pretty_json }}</pre>
+        </details>
+        <div class="tool-try">
+          <h4>Try it</h4>
+          <form method="post" action="/tools/call" class="tool-try-form" data-tool="{{ tool.name }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <input type="hidden" name="tool_name" value="{{ tool.name }}">
+            <textarea name="arguments" class="json-textarea" rows="6" placeholder='{"param": "value"}'>{}</textarea>
+            <button type="submit" class="button secondary small">Execute</button>
+          </form>
+          <div class="tool-result"></div>
+        </div>
+      </article>
+    {% endfor %}
+    </div>
+  </section>
+  {% endfor %}
+{% else %}
+  <section class="empty-state panel"><div class="empty-icon">🔧</div><h2>No tools registered</h2><p>Tools will appear here once they are registered in the store.</p></section>
+{% endif %}
+
+<script>
+// Handle tool try forms
+document.addEventListener('DOMContentLoaded', () => {
+  document.querySelectorAll('.tool-try-form').forEach(form => {
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const btn = form.querySelector('button[type="submit"]');
+      const resultDiv = form.parentElement.querySelector('.tool-result');
+      btn.disabled = true;
+      btn.textContent = 'Running...';
+      
+      const formData = new FormData(form);
+      try {
+        const response = await fetch('/tools/call', { method: 'POST', body: formData });
+        const data = await response.json();
+        resultDiv.innerHTML = `<pre class="code-block">${JSON.stringify(data, null, 2)}</pre>`;
+        resultDiv.className = 'tool-result ' + (data.isError ? 'error' : 'success');
+      } catch (err) {
+        resultDiv.innerHTML = `<pre class="code-block error-output">Error: ${err.message}</pre>`;
+        resultDiv.className = 'tool-result error';
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Execute';
+      }
+    });
+  });
+});
+</script>
+{% endblock %}
