@@ -33,7 +33,7 @@ DECOMPOSE_SCHEMA = {
                     "additionalProperties": False, "properties": {
                         "name": {"type": "string", "pattern": "^[a-z_][a-zA-Z0-9_]*$"},
                         "type": {"type": "string"}, "description": {"type": "string"}
-                    }}}}}}},
+                    }}}}}},
         "external_inputs": {"type": "array", "items": {
             "type": "object", "required": ["name", "description", "source"],
             "additionalProperties": False, "properties": {
@@ -47,8 +47,9 @@ DECOMPOSE_SCHEMA = {
                 "name": {"type": "string", "pattern": "^[a-z][a-z0-9-]*$"},
                 "description": {"type": "string"},
                 "destination": {"type": "string", "enum": ["user", "file", "api", "db", "ui", "other"]}
-            }}}
-    }
+            }}},
+    }}
+
 SELECT_MAP_SCHEMA = {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "title": "SelectMapOutput",
@@ -85,7 +86,7 @@ INTERFACES_SCHEMA = {
                                 "name": {"type": "string", "pattern": "^[a-z_][a-zA-Z0-9_]*$"},
                                 "type": {"type": "string"}, "description": {"type": "string"},
                                 "optional": {"type": "boolean", "default": False}
-                            }}}}}}},
+                            }}}}}},
                 "components": {"type": "array", "items": {
                     "type": "object", "required": ["name", "provides", "consumes"],
                     "additionalProperties": False, "properties": {
@@ -100,20 +101,26 @@ INTERFACES_SCHEMA = {
                             }}},
                         "consumes": {"type": "array", "items": {"type": "string", "pattern": "^[a-z][a-z0-9-]*$"}}
                     }}},
-                "scenarios": {"type": "array", "items": {
-                    "type": "object", "required": ["id", "title", "steps"],
-                    "additionalProperties": False, "properties": {
-                        "id": {"type": "string", "pattern": "^S[0-9]+$"},
-                        "title": {"type": "string"},
-                        "steps": {"type": "array", "items": {
-                            "type": "object", "required": ["actor", "action", "expects"],
-                            "additionalProperties": False, "properties": {
-                                "actor": {"type": "string"}, "action": {"type": "string"},
-                                "expects": {"type": "string"},
-                                "provides": {"type": "array", "items": {"type": "string"}}
-                            }}}}}}}
-            }
-        }
+                "scenarios": {
+                    "type": "array", "items": {
+                        "type": "object", "required": ["id", "title", "steps"],
+                        "additionalProperties": False, "properties": {
+                            "id": {"type": "string", "pattern": "^S[0-9]+$"},
+                            "title": {"type": "string"},
+                            "steps": {"type": "array", "items": {
+                                "type": "object", "required": [],
+                                "additionalProperties": False, "properties": {
+                                    "caller": {"type": "string", "description": "Component id initiating the call"},
+                                    "callee": {"type": "string", "description": "Component id being called"},
+                                    "call": {"type": "string", "description": "Function name, no parentheses"},
+                                    "fields": {"type": "array", "items": {"type": "string"}},
+                                    "actor": {"type": "string"}, "action": {"type": "string"},
+                                    "expects": {"type": "string"},
+                                    "provides": {"type": "array", "items": {"type": "string"}},
+                                }}}}
+                        }}}
+            }}
+    }
 CHECK_INTERFACES_SCHEMA = {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "title": "CheckInterfacesOutput",
@@ -207,11 +214,20 @@ SCHEMAS = {
 def get_schema(name: str) -> dict[str, Any]:
     return SCHEMAS.get(name, {})
 
+
 def write_schemas_to_disk() -> None:
+    """Generate schemas/*.json from this module (explicit only, not at import time).
+
+    schemas.py is the single source of truth. The JSON files are build artifacts
+    for external consumers and documentation.
+    """
     _SCHEMAS_DIR.mkdir(exist_ok=True)
     for name, schema in SCHEMAS.items():
         (_SCHEMAS_DIR / f"{name}.json").write_text(json.dumps(schema, indent=2, sort_keys=True), encoding="utf-8")
     contract_schema = {"$schema": "http://json-schema.org/draft-07/schema#", "title": "Contract", **INTERFACES_SCHEMA["properties"]["contract"]}
     (_SCHEMAS_DIR / "contract.json").write_text(json.dumps(contract_schema, indent=2, sort_keys=True), encoding="utf-8")
 
-write_schemas_to_disk()
+
+if __name__ == "__main__":
+    write_schemas_to_disk()
+    print(f"Wrote {len(SCHEMAS) + 1} schemas to {_SCHEMAS_DIR}")

@@ -1,19 +1,70 @@
-"""Structured output with JSON schema validation and repair loop (X1)."""
+"""Structured output with JSON schema validation and repair loop (X1, D9)."""
 
 from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any
 
 from .schemas import get_schema
 
 logger = logging.getLogger(__name__)
 
+# D9: phrases that indicate the server rejected a structured-output request
+_REJECTION_PATTERNS = (
+    "response_format", "json_schema", "grammar", "not supported", "unsupported",
+    "invalid request", "bad request", "unknown field", "unexpected keyword",
+    "400", "422", "not implemented",
+)
+
 
 class StructuredOutputError(Exception):
     """Raised when structured output fails after all repair attempts."""
     pass
+
+
+def _is_rejection(exc: Exception) -> bool:
+    text = f"{type(exc).__name__}: {exc}".lower()
+    return any(p in text for p in _REJECTION_PATTERNS)
+
+
+def _json_schema_to_grammar(schema: dict[str, Any]) -> str:
+    """Build a conservative GBNF grammar from a JSON schema (D9 grammar fallback)."""
+    counter = [0]
+
+    def emit(node: dict[str, Any]) -> str:
+        t = node.get("type")
+        if "enum" in node:
+            return "(" + " | ".join(json.dumps(v) for v in node["enum"]) + ")"
+        if t == "object":
+            parts = ['"{"']
+            props = node.get("properties", {})
+            required = set(node.get("required", []))
+            for i, (key, sub) in enumerate(props.items()):
+                sep = "" if i == 0 else '","'
+                sub_rule = emit(sub)
+                if key not in required:
+                    sub_rule = f"({sub_rule})?"
+                parts.append(f'"{sep}{json.dumps(key)}":" {sub_rule}')
+            parts.append('"}"')
+            return " ".join(parts)
+        if t == "array":
+            item = emit(node.get("items", {}))
+            return f'"[" ({item} ("," {item})*)? "]"'
+        if t == "string":
+            return '"\\"" char* "\\""'
+        if t == "integer":
+            return '("-"? [0-9]+)'
+        if t == "number":
+            return '("-"? [0-9]+ ("." [0-9]+)?)'
+        if t == "boolean":
+            return "(true | false)"
+        if t == "null":
+            return "null"
+        return '"\\"" char* "\\""'
+
+    return "root ::= " + emit(schema) + '\nchar ::= [^"\\\\] | "\\\\" .'
 
 
 def call_structured_json(
@@ -25,50 +76,70 @@ def call_structured_json(
     meta: dict[str, Any] | None = None,
     max_repairs: int = 3,
 ) -> dict[str, Any]:
-    """Call model with JSON schema constrained output, with validation and repair loop.
+    """Call model with constrained output using the D9 fallback chain.
 
-    Uses llama-server's response_format (JSON schema) where supported,
-    falls back to grammar-constrained, then to validate-and-repair.
+    Order: JSON-schema response_format -> GBNF grammar -> validate-and-repair.
+    A rejected constraint mode is switched immediately (never retried with the
+    same unsupported request). Reasoning-only responses are never parsed as JSON.
     """
-    # Use the schema directly for response_format
     response_format = {"type": "json_schema", "json_schema": {"name": "output", "schema": schema, "strict": True}}
+    grammar = _json_schema_to_grammar(schema)
+    modes: list[tuple[str, dict[str, Any]]] = [
+        ("json_schema", {"response_format": response_format}),
+        ("grammar", {"grammar": grammar}),
+        ("validate_only", {}),
+    ]
+    mode_index = 0
+    last_error: Exception | None = None
 
     for attempt in range(max_repairs + 1):
+        label, kwargs = modes[mode_index]
+        attempt_messages = list(messages)
+        if label == "validate_only":
+            attempt_messages.append({
+                "role": "user",
+                "content": "Output ONLY a JSON object matching this schema, no prose or markdown fences:\n"
+                           + json.dumps(schema, indent=2),
+            })
         try:
-            res = client.chat(
-                role,
-                messages,
-                response_format=response_format,
-                tag=tag,
-                meta=meta,
-            )
-            content = res.message.content
-            if not content:
-                raise ValueError("Empty response")
+            res = client.chat(role, attempt_messages, tag=tag, meta=meta, **kwargs)
+        except Exception as exc:
+            if _is_rejection(exc) and mode_index < len(modes) - 1:
+                logger.warning("Server rejected %s (%s); falling back to %s", label, exc, modes[mode_index + 1][0])
+                mode_index += 1
+                continue
+            raise
 
-            parsed = json.loads(content)
+        content = res.message.content
+        if not content:
+            raise StructuredOutputError("Empty response content (reasoning-only response?)")
 
-            # Validate against schema
+        cleaned = content.strip()
+        cleaned = re.sub(r"^<think>.*?</think>\s*", "", cleaned, flags=re.DOTALL)
+        if cleaned.startswith("```"):
+            cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned)
+            cleaned = re.sub(r"\s*```$", "", cleaned)
+
+        try:
+            parsed = json.loads(cleaned)
             _validate_against_schema(parsed, schema)
-
             return parsed
-
-        except json.JSONDecodeError as e:
-            logger.warning(f"JSON decode error on attempt {attempt + 1}: {e}")
+        except Exception as exc:
+            last_error = exc
+            logger.warning("Structured output %s attempt %d failed: %s", label, attempt + 1, exc)
             if attempt == max_repairs:
-                raise StructuredOutputError(f"Failed to parse JSON after {max_repairs + 1} attempts: {e}")
-            # Add repair message
-            messages.append({"role": "assistant", "content": content if 'content' in locals() else ""})
-            messages.append({"role": "user", "content": f"The previous response was not valid JSON. Error: {e}. Please output only valid JSON matching the schema."})
+                break
 
-        except Exception as e:
-            logger.warning(f"Validation error on attempt {attempt + 1}: {e}")
-            if attempt == max_repairs:
-                raise StructuredOutputError(f"Failed validation after {max_repairs + 1} attempts: {e}")
-            messages.append({"role": "assistant", "content": content if 'content' in locals() else ""})
-            messages.append({"role": "user", "content": f"The previous response failed validation: {e}. Please output only valid JSON matching the schema."})
+        messages.append({"role": "assistant", "content": content})
+        messages.append({
+            "role": "user",
+            "content": f"The previous response was not valid JSON matching the schema. Error: {last_error}. "
+                       "Output ONLY the corrected JSON object, no prose.",
+        })
 
-    raise StructuredOutputError("Max repair attempts exceeded")
+    raise StructuredOutputError(
+        f"Failed to get valid structured output after {max_repairs + 1} attempts: {last_error}"
+    )
 
 
 def _validate_against_schema(data: Any, schema: dict[str, Any]) -> None:

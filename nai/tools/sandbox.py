@@ -175,11 +175,13 @@ class Sandbox:
         return result[0]
     
     def limit_output(self, output: str) -> str:
-        """Limit output size, truncate if necessary."""
+        """Limit output size, truncate if necessary (total stays within the limit)."""
         output_bytes = output.encode("utf-8")
         if len(output_bytes) > self.max_output_bytes:
-            truncated = output_bytes[:self.max_output_bytes].decode("utf-8", errors="ignore")
-            return truncated + f"\n... [output truncated, {len(output_bytes)} bytes total]"
+            suffix = "... [output truncated]"
+            keep = max(0, self.max_output_bytes - len(suffix.encode("utf-8")))
+            truncated = output_bytes[:keep].decode("utf-8", errors="ignore")
+            return truncated + suffix
         return output
 
 

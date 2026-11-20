@@ -2,13 +2,27 @@
 from __future__ import annotations
 
 import sys
+import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Callable
 
 COLORS = dict(dim="\033[2m", cyan="\033[36m", yellow="\033[33m", green="\033[32m", red="\033[31m", end="\033[0m")
 _TRANSCRIPT: Path | None = None
 _SINKS: list[Callable[[str, str, str, str | None], None]] = []
+_LOCAL = threading.local()
+
+
+@contextmanager
+def log_context(value: str | None):
+    """Tag log lines written by the current thread (scheduler uses the job id)."""
+    prev = getattr(_LOCAL, "ctx", None)
+    _LOCAL.ctx = value
+    try:
+        yield
+    finally:
+        _LOCAL.ctx = prev
 
 
 def set_transcript(path: Path | None) -> None:
@@ -36,10 +50,11 @@ def log(tag: str, text: str, color: str = "dim", ctx: str | None = None) -> None
     if _TRANSCRIPT:
         with open(_TRANSCRIPT, "a", encoding="utf-8") as f:
             f.write(f"{time.strftime('%H:%M:%S')} {line}\n")
-    # Also call any registered sinks
+    # Also call any registered sinks with the current thread's log context
+    effective_ctx = ctx if ctx is not None else getattr(_LOCAL, "ctx", None)
     for sink in _SINKS:
         try:
-            sink(tag, text, color, ctx)
+            sink(tag, text, color, effective_ctx)
         except Exception:
             pass  # sink errors must not break logging
 

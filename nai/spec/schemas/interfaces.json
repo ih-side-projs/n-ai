@@ -4,61 +4,61 @@
   "properties": {
     "contract": {
       "additionalProperties": false,
-      "components": {
-        "items": {
-          "additionalProperties": false,
-          "properties": {
-            "consumes": {
-              "items": {
+      "properties": {
+        "components": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "consumes": {
+                "items": {
+                  "pattern": "^[a-z][a-z0-9-]*$",
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "description": {
+                "type": "string"
+              },
+              "name": {
                 "pattern": "^[a-z][a-z0-9-]*$",
                 "type": "string"
               },
-              "type": "array"
-            },
-            "description": {
-              "type": "string"
-            },
-            "name": {
-              "pattern": "^[a-z][a-z0-9-]*$",
-              "type": "string"
-            },
-            "provides": {
-              "items": {
-                "additionalProperties": false,
-                "properties": {
-                  "description": {
-                    "type": "string"
+              "provides": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "description": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "pattern": "^[a-z_][a-zA-Z0-9_]*$",
+                      "type": "string"
+                    },
+                    "returns": {
+                      "type": "string"
+                    },
+                    "signature": {
+                      "type": "string"
+                    }
                   },
-                  "name": {
-                    "pattern": "^[a-z_][a-zA-Z0-9_]*$",
-                    "type": "string"
-                  },
-                  "returns": {
-                    "type": "string"
-                  },
-                  "signature": {
-                    "type": "string"
-                  }
+                  "required": [
+                    "name",
+                    "signature"
+                  ],
+                  "type": "object"
                 },
-                "required": [
-                  "name",
-                  "signature"
-                ],
-                "type": "object"
-              },
-              "type": "array"
-            }
+                "type": "array"
+              }
+            },
+            "required": [
+              "name",
+              "provides",
+              "consumes"
+            ],
+            "type": "object"
           },
-          "required": [
-            "name",
-            "provides",
-            "consumes"
-          ],
-          "type": "object"
+          "type": "array"
         },
-        "type": "array"
-      },
-      "properties": {
         "entities": {
           "items": {
             "additionalProperties": false,
@@ -105,6 +105,70 @@
             "type": "object"
           },
           "type": "array"
+        },
+        "scenarios": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "pattern": "^S[0-9]+$",
+                "type": "string"
+              },
+              "steps": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "action": {
+                      "type": "string"
+                    },
+                    "actor": {
+                      "type": "string"
+                    },
+                    "call": {
+                      "description": "Function name, no parentheses",
+                      "type": "string"
+                    },
+                    "callee": {
+                      "description": "Component id being called",
+                      "type": "string"
+                    },
+                    "caller": {
+                      "description": "Component id initiating the call",
+                      "type": "string"
+                    },
+                    "expects": {
+                      "type": "string"
+                    },
+                    "fields": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "provides": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "required": [],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "title": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "title",
+              "steps"
+            ],
+            "type": "object"
+          },
+          "type": "array"
         }
       },
       "required": [
@@ -112,56 +176,6 @@
         "components",
         "scenarios"
       ],
-      "scenarios": {
-        "items": {
-          "additionalProperties": false,
-          "properties": {
-            "id": {
-              "pattern": "^S[0-9]+$",
-              "type": "string"
-            },
-            "steps": {
-              "items": {
-                "additionalProperties": false,
-                "properties": {
-                  "action": {
-                    "type": "string"
-                  },
-                  "actor": {
-                    "type": "string"
-                  },
-                  "expects": {
-                    "type": "string"
-                  },
-                  "provides": {
-                    "items": {
-                      "type": "string"
-                    },
-                    "type": "array"
-                  }
-                },
-                "required": [
-                  "actor",
-                  "action",
-                  "expects"
-                ],
-                "type": "object"
-              },
-              "type": "array"
-            },
-            "title": {
-              "type": "string"
-            }
-          },
-          "required": [
-            "id",
-            "title",
-            "steps"
-          ],
-          "type": "object"
-        },
-        "type": "array"
-      },
       "type": "object"
     }
   },

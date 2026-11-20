@@ -5,70 +5,6 @@
     "merged_map": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
-      "external_inputs": {
-        "items": {
-          "additionalProperties": false,
-          "properties": {
-            "description": {
-              "type": "string"
-            },
-            "name": {
-              "pattern": "^[a-z][a-z0-9-]*$",
-              "type": "string"
-            },
-            "source": {
-              "enum": [
-                "user",
-                "file",
-                "api",
-                "config",
-                "env",
-                "other"
-              ],
-              "type": "string"
-            }
-          },
-          "required": [
-            "name",
-            "description",
-            "source"
-          ],
-          "type": "object"
-        },
-        "type": "array"
-      },
-      "external_outputs": {
-        "items": {
-          "additionalProperties": false,
-          "properties": {
-            "description": {
-              "type": "string"
-            },
-            "destination": {
-              "enum": [
-                "user",
-                "file",
-                "api",
-                "db",
-                "ui",
-                "other"
-              ],
-              "type": "string"
-            },
-            "name": {
-              "pattern": "^[a-z][a-z0-9-]*$",
-              "type": "string"
-            }
-          },
-          "required": [
-            "name",
-            "description",
-            "destination"
-          ],
-          "type": "object"
-        },
-        "type": "array"
-      },
       "properties": {
         "components": {
           "items": {
@@ -100,6 +36,70 @@
           },
           "maxItems": 10,
           "minItems": 1,
+          "type": "array"
+        },
+        "external_inputs": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "description": {
+                "type": "string"
+              },
+              "name": {
+                "pattern": "^[a-z][a-z0-9-]*$",
+                "type": "string"
+              },
+              "source": {
+                "enum": [
+                  "user",
+                  "file",
+                  "api",
+                  "config",
+                  "env",
+                  "other"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "description",
+              "source"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "external_outputs": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "description": {
+                "type": "string"
+              },
+              "destination": {
+                "enum": [
+                  "user",
+                  "file",
+                  "api",
+                  "db",
+                  "ui",
+                  "other"
+                ],
+                "type": "string"
+              },
+              "name": {
+                "pattern": "^[a-z][a-z0-9-]*$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "description",
+              "destination"
+            ],
+            "type": "object"
+          },
           "type": "array"
         },
         "shared_entities": {

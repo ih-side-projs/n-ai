@@ -40,7 +40,10 @@ JOB_KINDS = {
 }
 ARTIFACT_KINDS = {"spec", "contract", "code", "test", "output-file", "report", "log"}
 APPROVAL_STAGES = {"component-map", "interfaces", "component-spec", "escalation"}
-COMMAND_ACTIONS = {"pause", "resume", "cancel_job", "retry_node", "approve", "reject"}
+COMMAND_ACTIONS = {
+    "pause", "resume", "cancel_job", "cancel", "retry_node", "approve", "reject",
+    "rerun_stage", "reorder",
+}
 
 # STO-4. A transition to stale is permitted from every state, including done.
 _ALLOWED_TRANSITIONS: dict[str, set[str]] = {

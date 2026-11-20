@@ -66,6 +66,29 @@ def _call_structured(ctx: Any, prompt_name: str, payload: dict[str, Any], schema
     except StructuredOutputError as exc:
         raise RuntimeError(f"Structured output failed after {max_repairs} repairs: {exc}")
 
+def _size_limits(ctx: Any) -> dict[str, Any]:
+    """X9 size limits: project settings > NAI config > spec defaults.
+
+    D2 candidate counts (3 at root, 1 elsewhere) are separate from the X9
+    ``max_components_per_level`` default of 7. Both are read from config.
+    """
+    try:
+        from ..config import load_config
+        defaults = load_config().limits.to_dict()
+    except Exception:
+        defaults = {
+            "max_requirements_per_component": 8,
+            "max_public_functions_per_component": 10,
+            "max_components_per_level": 7,
+            "max_depth": 4,
+            "candidates_root": 3,
+            "candidates_nonroot": 1,
+        }
+    settings = (getattr(ctx, "project", None) or {}).get("settings") or {}
+    overrides = {k: v for k, v in settings.items() if k in defaults}
+    return {**defaults, **overrides}
+
+
 # ---------------------------------------------------------------------------
 # Stage 1: Decompose
 # ---------------------------------------------------------------------------
@@ -76,8 +99,16 @@ def handle_decompose(ctx: Any) -> Any:
     ws_root = _workspace_root(ctx)
     brief = node.get("spec_text") or project.get("brief") or ""
     target_stack = project.get("settings", {}).get("target_env", {}).get("language", "Python 3.12")
-    max_components = 3 if node.get("parent_id") is None else 1
-    payload = {"brief": brief, "target_stack": target_stack, "max_components_per_level": max_components, "max_depth": project.get("settings", {}).get("max_depth", 3)}
+    limits = _size_limits(ctx)
+    # X9: max_components_per_level (default 7), NOT the D2 candidate count.
+    # D2 candidate count is used by handle_select_map, passed separately.
+    payload = {
+        "brief": brief,
+        "target_stack": target_stack,
+        "max_components_per_level": limits["max_components_per_level"],
+        "max_depth": limits["max_depth"],
+        "size_limits": limits,
+    }
     try:
         result = _call_structured(ctx, DECOMPOSE, payload, DECOMPOSE_SCHEMA, "decompose")
     except RuntimeError as e:

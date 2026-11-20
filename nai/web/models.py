@@ -1,90 +1,136 @@
-"""Model server client for WP8."""
+"""Read-only llama-swap/OpenAI-compatible model-server inspection."""
 
 from __future__ import annotations
 
 import json
+import ipaddress
 import time
-from dataclasses import dataclass
+import urllib.error
+import urllib.request
 from typing import Any
+from urllib.parse import urlsplit
 
-import httpx
 
-
-class ModelServerError(Exception):
-    """Raised when the model server returns an error."""
+class ModelServerError(RuntimeError):
     pass
 
 
-@dataclass
 class ModelServerClient:
-    """Client for interacting with the local llama-swap model server."""
-    base_url: str | None
-    api_key: str | None
-    _client: httpx.AsyncClient | None = None
-
-    def __post_init__(self):
+    def __init__(self, base_url: str | None, api_key: str | None = None, timeout: float = 3.0):
+        self.base_url = (base_url or "").rstrip("/")
         if self.base_url:
-            self._client = httpx.AsyncClient(
-                base_url=self.base_url.rstrip("/"),
-                headers={"Authorization": f"Bearer {self.api_key}"} if self.api_key else {},
-                timeout=30.0,
-            )
+            parsed = urlsplit(self.base_url)
+            hostname = parsed.hostname or ""
+            try:
+                loopback = ipaddress.ip_address(hostname).is_loopback
+            except ValueError:
+                loopback = hostname.lower() == "localhost"
+            if parsed.scheme not in {"http", "https"} or not loopback or parsed.username or parsed.password:
+                raise ValueError("model server URL must be an http(s) loopback address without embedded credentials")
+            if parsed.query or parsed.fragment:
+                raise ValueError("model server URL must not include a query string or fragment")
+        self.api_key = api_key
+        self.timeout = timeout
 
-    async def close(self):
-        if self._client:
-            await self._client.aclose()
+    @property
+    def configured(self) -> bool:
+        return bool(self.base_url)
+
+    def _request(self, path: str, *, method: str = "GET", body: dict[str, Any] | None = None,
+                 timeout: float | None = None) -> tuple[int, Any, float]:
+        if not self.configured:
+            raise ModelServerError("Model server URL is not configured")
+        headers = {"Accept": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        data = None
+        if body is not None:
+            data = json.dumps(body).encode("utf-8")
+            headers["Content-Type"] = "application/json"
+        request = urllib.request.Request(self.base_url + path, data=data, headers=headers, method=method)
+        started = time.monotonic()
+        try:
+            with urllib.request.urlopen(request, timeout=timeout or self.timeout) as response:
+                raw = response.read(2_000_000)
+                elapsed = time.monotonic() - started
+                content_type = response.headers.get("Content-Type", "")
+                if "json" in content_type:
+                    try:
+                        payload = json.loads(raw.decode("utf-8"))
+                    except (UnicodeDecodeError, json.JSONDecodeError):
+                        payload = {"raw": raw.decode("utf-8", errors="replace")[:2000]}
+                else:
+                    payload = {"raw": raw.decode("utf-8", errors="replace")[:2000]}
+                return int(response.status), payload, elapsed
+        except urllib.error.HTTPError as exc:
+            detail = exc.read(2000).decode("utf-8", errors="replace")
+            raise ModelServerError(f"HTTP {exc.code}: {detail}") from exc
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            raise ModelServerError(f"{type(exc).__name__}: {exc}") from exc
 
     def snapshot(self) -> dict[str, Any]:
-        """Return a snapshot of the model server state (synchronous, for template rendering)."""
-        if not self._client or not self.base_url:
-            return {"models": [], "running": None, "healthy": False}
+        if not self.configured:
+            return {"configured": False, "healthy": None, "error": "NAI_LLAMA_SWAP_URL is not configured",
+                    "models": [], "loaded_models": []}
+        output: dict[str, Any] = {"configured": True, "healthy": False, "models": [], "loaded_models": [], "error": None}
         try:
-            with httpx.Client(
-                base_url=self.base_url.rstrip("/"),
-                headers={"Authorization": f"Bearer {self.api_key}"} if self.api_key else {},
-                timeout=5.0,
-            ) as client:
-                models_resp = client.get("/v1/models")
-                models_resp.raise_for_status()
-                models = models_resp.json().get("data", [])
-
-                running = None
-                try:
-                    running_resp = client.get("/running")
-                    if running_resp.status_code == 200:
-                        running = running_resp.json().get("model")
-                except httpx.HTTPError:
-                    pass
-
-                return {"models": models, "running": running, "healthy": True}
-        except httpx.HTTPError:
-            return {"models": [], "running": None, "healthy": False}
-
-    async def smoke_test(self, model_id: str) -> dict[str, Any]:
-        """Run a quick smoke test against the specified model."""
-        if not self._client:
-            raise ModelServerError("Model server not configured")
-
-        start = time.perf_counter()
+            status, payload, elapsed = self._request("/health")
+            output["healthy"] = status == 200
+            output["health_seconds"] = round(elapsed, 3)
+            output["health_response"] = payload
+        except ModelServerError as exc:
+            output["error"] = str(exc)
         try:
-            resp = await self._client.post(
-                "/v1/chat/completions",
-                json={
-                    "model": model_id,
-                    "messages": [{"role": "user", "content": "Say 'ok'."}],
-                    "max_tokens": 10,
-                    "temperature": 0,
-                },
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            latency_ms = int((time.perf_counter() - start) * 1000)
-            return {
-                "ok": True,
-                "model_id": model_id,
-                "latency_ms": latency_ms,
-                "response": data.get("choices", [{}])[0].get("message", {}).get("content", ""),
-            }
-        except httpx.HTTPError as exc:
-            latency_ms = int((time.perf_counter() - start) * 1000)
-            raise ModelServerError(f"Smoke test failed: {exc}") from exc
+            _, payload, _ = self._request("/v1/models")
+            if isinstance(payload, dict):
+                output["models"] = payload.get("data", payload.get("models", [])) or []
+            elif isinstance(payload, list):
+                output["models"] = payload
+        except ModelServerError as exc:
+            output["models_error"] = str(exc)
+        try:
+            _, payload, _ = self._request("/running")
+            output["loaded_models"] = _extract_running_models(payload)
+        except ModelServerError as exc:
+            output["running_error"] = str(exc)
+        return output
+
+    def smoke_test(self, model_id: str, *, timeout: float = 180.0) -> dict[str, Any]:
+        status, payload, elapsed = self._request(
+            "/v1/chat/completions", method="POST", timeout=timeout,
+            body={"model": model_id, "messages": [{"role": "user", "content": "Reply with exactly: nai-ok"}],
+                  "temperature": 0, "max_tokens": 8, "stream": False},
+        )
+        choices = payload.get("choices", []) if isinstance(payload, dict) else []
+        content = ""
+        if choices:
+            message = choices[0].get("message") or {}
+            content = str(message.get("content") or "")[:300]
+        usage = payload.get("usage", {}) if isinstance(payload, dict) else {}
+        return {"ok": status == 200, "status_code": status, "model_id": model_id,
+                "latency_seconds": round(elapsed, 3), "response": content, "usage": usage}
+
+
+def _extract_running_models(payload: Any) -> list[dict[str, Any]]:
+    """Normalize known /running response shapes without assuming one schema."""
+    raw: Any = payload
+    if isinstance(raw, dict):
+        for key in ("running", "models", "data", "loaded"):
+            if key in raw:
+                raw = raw[key]
+                break
+        else:
+            raw = [raw]
+    if isinstance(raw, str):
+        raw = [raw]
+    if not isinstance(raw, list):
+        return []
+    result = []
+    for item in raw:
+        if isinstance(item, str):
+            result.append({"id": item, "status": "running"})
+        elif isinstance(item, dict):
+            model_id = item.get("id") or item.get("model") or item.get("model_id") or item.get("name")
+            if model_id:
+                result.append({"id": str(model_id), "status": str(item.get("status") or item.get("state") or "running")})
+    return result

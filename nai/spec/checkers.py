@@ -16,6 +16,40 @@ class Finding:
     def __str__(self) -> str:
         return f"{self.file}:{self.line}: {self.severity.upper()}: [{self.code}] {self.message}"
 
+def _step_caller(step: dict[str, Any]) -> str:
+    """SPEC-3: explicit caller, with legacy actor fallback."""
+    return str(step.get("caller") or step.get("actor") or "")
+
+
+def _step_callee(step: dict[str, Any]) -> str:
+    return str(step.get("callee") or "")
+
+
+def _step_call(step: dict[str, Any]) -> str:
+    """SPEC-3: explicit call name, with legacy regex fallback from action."""
+    explicit = str(step.get("call") or "").strip()
+    if explicit:
+        return explicit.split("(", 1)[0].strip()
+    match = re.search(r"(\w+)\s*\(", str(step.get("action") or ""))
+    return match.group(1) if match else ""
+
+
+def _step_produced_fields(step: dict[str, Any]) -> list[str]:
+    """Fields produced by a step: explicit `fields`, else legacy `provides`."""
+    fields = [str(f) for f in (step.get("fields") or [])]
+    if fields:
+        return fields
+    return [str(f) for f in (step.get("provides") or [])]
+
+
+def _step_consumed_fields(step: dict[str, Any]) -> list[str]:
+    """Fields consumed by a step: explicit `fields`, else legacy `expects` regex."""
+    fields = [str(f) for f in (step.get("fields") or [])]
+    if fields:
+        return fields
+    return re.findall(r"(\w+\.\w+)", str(step.get("expects") or ""))
+
+
 def check_interfaces(contract: dict[str, Any]) -> list[Finding]:
     findings: list[Finding] = []
     entities = {e["name"]: e for e in contract.get("entities", [])}
@@ -24,36 +58,30 @@ def check_interfaces(contract: dict[str, Any]) -> list[Finding]:
     field_producers: dict[str, list[str]] = defaultdict(list)
     for scenario in scenarios:
         for step_idx, step in enumerate(scenario.get("steps", [])):
-            actor = step.get("actor", "")
-            action = step.get("action", "")
-            provides = step.get("provides", [])
+            actor = _step_caller(step)
             if actor not in components and actor not in ("user", "external"):
                 findings.append(Finding("contract.json", 0, "error", "SPEC3_UNKNOWN_ACTOR", f"Scenario {scenario['id']} step {step_idx}: unknown actor '{actor}'"))
-            if actor in components:
-                comp = components[actor]
-                prov_names = [p["name"] for p in comp.get("provides", [])]
-                func_match = re.search(r"(\w+)\s*\(", action)
-                if func_match:
-                    func_name = func_match.group(1)
-                    if func_name not in prov_names:
-                        findings.append(Finding("contract.json", 0, "error", "SPEC3_MISSING_CALL", f"Scenario {scenario['id']} step {step_idx}: '{actor}' calls '{func_name}' not in provides"))
-            for field in provides:
+            # SPEC-3: use explicit callee + call when present; fall back to legacy action regex.
+            callee = _step_callee(step) or actor
+            func_name = _step_call(step)
+            if actor in components and func_name:
+                prov_names = [p["name"] for p in components.get(callee, components.get(actor, {})).get("provides", [])]
+                if func_name not in prov_names:
+                    findings.append(Finding("contract.json", 0, "error", "SPEC3_MISSING_CALL", f"Scenario {scenario['id']} step {step_idx}: '{callee}' calls '{func_name}' not in provides"))
+            for field in _step_produced_fields(step):
                 field_producers[field].append(f"{scenario['id']}:{step_idx}")
     for scenario in scenarios:
         for step_idx, step in enumerate(scenario.get("steps", [])):
-            expects = step.get("expects", "")
-            field_refs = re.findall(r"(\w+\.\w+)", expects)
-            for field_ref in field_refs:
+            for field_ref in _step_consumed_fields(step):
                 if field_ref not in field_producers:
                     findings.append(Finding("contract.json", 0, "error", "SPEC3_MISSING_PROVIDER", f"Scenario {scenario['id']} step {step_idx}: consumed field '{field_ref}' has no producer"))
     for scenario in scenarios:
         for step_idx, step in enumerate(scenario.get("steps", [])):
-            provides = step.get("provides", [])
-            for field in provides:
+            for field in _step_produced_fields(step):
                 consumed = False
                 for s2 in scenarios:
                     for step2 in s2.get("steps", []):
-                        if field in step2.get("expects", "") or field in step2.get("provides", []):
+                        if field in _step_produced_fields(step2) or field in _step_consumed_fields(step2):
                             consumed = True
                             break
                     if consumed:
@@ -68,16 +96,19 @@ def check_interfaces(contract: dict[str, Any]) -> list[Finding]:
                         findings.append(Finding("contract.json", 0, "warning", "SPEC3_UNCONSUMED_FIELD", f"Scenario {scenario['id']} step {step_idx}: produced field '{field}' has no consumer"))
     for scenario in scenarios:
         for step_idx, step in enumerate(scenario.get("steps", [])):
-            for field in step.get("provides", []) + re.findall(r"(\w+\.\w+)", step.get("expects", "")):
+            for field in _step_produced_fields(step) + _step_consumed_fields(step):
                 entity_name = field.split(".")[0]
                 if entity_name not in entities:
                     findings.append(Finding("contract.json", 0, "error", "SPEC3_MISSING_ENTITY", f"Scenario {scenario['id']} step {step_idx}: references unknown entity '{entity_name}'"))
     used_components = set()
     for scenario in scenarios:
         for step in scenario.get("steps", []):
-            actor = step.get("actor", "")
+            actor = _step_caller(step)
             if actor in components:
                 used_components.add(actor)
+            callee = _step_callee(step)
+            if callee in components:
+                used_components.add(callee)
     for comp_name in components:
         if comp_name not in used_components:
             findings.append(Finding("contract.json", 0, "warning", "SPEC3_UNUSED_COMPONENT", f"Component '{comp_name}' does not appear in any scenario"))
@@ -105,6 +136,10 @@ def _has_cycle(graph: dict[str, set[str]]) -> bool:
             elif neighbor in rec_stack:
                 return True
         rec_stack.remove(node)
+        return False
+    return any(dfs(n) for n in graph if n not in visited)
+
+
 # ---------------------------------------------------------------------------
 # SPEC-4: Spec Lint
 # ---------------------------------------------------------------------------
@@ -184,6 +219,7 @@ def lint_spec(spec_text: str, contract: dict[str, Any] | None = None, filepath: 
 
     if contract:
         component_name = _extract_component_name(spec_text)
+        all_component_names = {c["name"] for c in contract.get("components", [])}
         if component_name:
             comp_contract = None
             for c in contract.get("components", []):
@@ -198,6 +234,11 @@ def lint_spec(spec_text: str, contract: dict[str, Any] | None = None, filepath: 
                 for dep in contract_deps:
                     if dep not in dependencies:
                         findings.append(Finding(filepath, 1, "warning", "SPEC4_MISSING_DEPENDENCY_IN_SPEC", f"Contract dependency '{dep}' not listed in spec"))
+            else:
+                # Component not in contract: still validate that declared deps exist.
+                for dep in dependencies:
+                    if dep not in ("none", "") and dep not in all_component_names:
+                        findings.append(Finding(filepath, 1, "error", "SPEC4_UNDECLARED_DEPENDENCY", f"Dependency '{dep}' is not a known component"))
 
     if contract:
         component_name = _extract_component_name(spec_text)

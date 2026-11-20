@@ -15,7 +15,7 @@ Output ONLY valid JSON matching the InterfacesOutput schema:
       {"name": "component-name", "description": "...", "provides": [{"name": "func_name", "signature": "func_name(arg: Type) -> ReturnType", "description": "...", "returns": "ReturnType"}], "consumes": ["other-component"]}
     ],
     "scenarios": [
-      {"id": "S1", "title": "Scenario title", "steps": [{"actor": "component-or-external", "action": "calls func_name with ...", "expects": "result or event", "provides": ["field1", "field2"]}]}
+      {"id": "S1", "title": "Scenario title", "steps": [{"caller": "component-or-external", "callee": "component-or-external", "call": "func_name", "fields": ["Entity.field", "Entity.other_field"]}]}
     ]
   }
 }
@@ -27,7 +27,7 @@ Rules:
    - provides: list of functions it implements (name, signature, description, returns)
    - consumes: list of sibling component names it depends on (must match depends_on)
 4. Scenarios: write end-to-end workflows covering the external_inputs -> external_outputs flow.
-   - Each step names the actor (component name or "user"/"external"), the action (call), and what it expects.
+   - Each step uses explicit fields: caller (component id or "user"/"external"), callee (component id being called), call (exact function name with no parentheses), and fields (array of Entity.field references passed or produced). Do NOT use free-text actor/action/expects; the JSON schema enforces the explicit fields.
    - The "provides" in each step lists the entity fields produced by that step.
 5. Every entity field consumed in a scenario must be produced by some component or be an external input.
 6. Every entity field produced by a component must be consumed by another component or be an external output.

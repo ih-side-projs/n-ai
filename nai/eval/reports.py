@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import json
 import subprocess
-from dataclasses import dataclass, asdict
-from datetime import datetime
+from dataclasses import dataclass, asdict, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -87,7 +87,7 @@ def generate_report(results: list[BenchmarkResult],
     }
     
     return BenchmarkReport(
-        generated_at=datetime.utcnow().isoformat() + "Z",
+        generated_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         nai_version=nai_version,
         git_commit=git_commit,
         model_profile=model_profile,
@@ -114,7 +114,7 @@ def get_git_commit() -> str:
 def write_report(report: BenchmarkReport, output_dir: Path, format: str = "both") -> tuple[Path, Path]:
     """Write report to files."""
     output_dir.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     
     json_path = output_dir / f"benchmark_report_{timestamp}.json"
     md_path = output_dir / f"benchmark_report_{timestamp}.md"

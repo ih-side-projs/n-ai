@@ -6,7 +6,7 @@ import json
 import subprocess
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -22,10 +22,10 @@ class BenchmarkResult:
     model_id: str
     quantization: str | None
     started_at: str
-    completed_at: str | None
-    duration_seconds: float | None
-    success: bool
-    error: str | None
+    completed_at: str | None = None
+    duration_seconds: float | None = None
+    success: bool = False
+    error: str | None = None
     metrics: dict[str, Any] = field(default_factory=dict)
     artifacts: list[str] = field(default_factory=list)
 
@@ -52,7 +52,7 @@ class BenchmarkHarness:
                    timeout: int = 3600) -> BenchmarkResult:
         """Run a single benchmark."""
         benchmark_id = benchmark_path.stem
-        started_at = datetime.utcnow().isoformat() + "Z"
+        started_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         
         # Prepare workspace
         workspace = self.output_dir / benchmark_id
@@ -79,7 +79,7 @@ class BenchmarkHarness:
         
         try:
             proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-            completed_at = datetime.utcnow().isoformat() + "Z"
+            completed_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
             result.completed_at = completed_at
             result.duration_seconds = (
                 datetime.fromisoformat(completed_at.replace("Z", "+00:00")) -
@@ -94,11 +94,11 @@ class BenchmarkHarness:
                 result.artifacts = [str(p.relative_to(self.output_dir)) for p in workspace.rglob("*") if p.is_file()]
                 
         except subprocess.TimeoutExpired:
-            result.completed_at = datetime.utcnow().isoformat() + "Z"
+            result.completed_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
             result.success = False
             result.error = f"Timeout after {timeout}s"
         except Exception as e:
-            result.completed_at = datetime.utcnow().isoformat() + "Z"
+            result.completed_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
             result.success = False
             result.error = str(e)
         

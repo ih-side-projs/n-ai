@@ -47,10 +47,31 @@ class ServerConfig:
 
 
 @dataclass
+class SizeLimits:
+    """X9: size limits are config, not constants."""
+    max_requirements_per_component: int = 8
+    max_public_functions_per_component: int = 10
+    max_components_per_level: int = 7
+    max_depth: int = 4
+    # D2: candidate count for component-map generation (separate from X9)
+    candidates_root: int = 3
+    candidates_nonroot: int = 1
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "SizeLimits":
+        known = {k: v for k, v in d.items() if k in cls.__dataclass_fields__}
+        return cls(**known)
+
+    def to_dict(self) -> dict:
+        return {k: getattr(self, k) for k in self.__dataclass_fields__}
+
+
+@dataclass
 class Config:
     server: ServerConfig = field(default_factory=ServerConfig)
     profiles: dict[str, ModelProfile] = field(default_factory=lambda: {"default": default_profile()})
     default_profile: str = "default"
+    limits: SizeLimits = field(default_factory=SizeLimits)
 
     def get_profile(self, name: str | None = None, *, reasoner: str | None = None, coder: str | None = None,
                     ctx: int | None = None, coder_ctx: int | None = None, max_tokens: int | None = None,
@@ -105,6 +126,8 @@ def load_config(path: str | Path | None = None, env=os.environ, cwd: Path | None
             except (ValueError, TypeError) as e:
                 raise ConfigError(f"profile {name!r}: {e}") from e
         cfg.default_profile = data.get("default_profile", cfg.default_profile)
+        if "limits" in data:
+            cfg.limits = SizeLimits.from_dict(data["limits"] or {})
     if env.get("LLAMA_SWAP_URL"):
         cfg.server.base_url = env["LLAMA_SWAP_URL"]
     if env.get("LLAMA_SWAP_KEY"):
