@@ -20,13 +20,13 @@ def sample_contract() -> dict:
             {"name": "Order", "fields": [{"name": "id", "type": "int"}, {"name": "user_id", "type": "int"}, {"name": "total", "type": "float"}]},
         ],
         "components": [
-            {"name": "auth", "provides": [{"name": "login", "signature": "login(username: str, password: str) -> User"}], "consumes": []},
-            {"name": "orders", "provides": [{"name": "create_order", "signature": "create_order(user_id: int, items: list) -> Order"}], "consumes": ["auth"]},
+            {"name": "auth", "provides": [{"name": "login", "signature": "login(username: str, password: str) -> User", "returns": "User"}], "consumes": []},
+            {"name": "orders", "provides": [{"name": "create_order", "signature": "create_order(user_id: int, items: list) -> Order", "returns": "Order"}], "consumes": ["auth"]},
         ],
         "scenarios": [
             {"id": "S1", "title": "User places order", "steps": [
-                {"actor": "auth", "action": "login('alice', 'secret')", "expects": "User.id", "provides": ["User.id"]},
-                {"actor": "orders", "action": "create_order(User.id, [...])", "expects": "Order.id", "provides": ["Order.id"]},
+                {"caller": "user", "callee": "auth", "call": "login", "fields": ["User.id"]},
+                {"caller": "auth", "callee": "orders", "call": "create_order", "fields": ["User.id", "Order.id"]},
             ]},
         ],
         "external_inputs": [{"name": "credentials", "description": "username and password", "source": "user"}],

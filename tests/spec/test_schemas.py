@@ -44,7 +44,7 @@ def test_interfaces_schema_valid():
         "contract": {
             "entities": [{"name": "User", "fields": [{"name": "id", "type": "int"}]}],
             "components": [{"name": "auth", "provides": [{"name": "login", "signature": "login(u,p) -> User", "returns": "User"}], "consumes": []}],
-            "scenarios": [{"id": "S1", "title": "Login", "steps": [{"actor": "auth", "action": "login(u,p)", "expects": "User is returned with a valid session token", "provides": ["User.id"]}]}],
+            "scenarios": [{"id": "S1", "title": "Login", "steps": [{"caller": "user", "callee": "auth", "call": "login", "fields": ["User.id"]}]}],
         },
     }
     _validate(valid, INTERFACES_SCHEMA)

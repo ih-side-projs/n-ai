@@ -118,41 +118,33 @@
                 "items": {
                   "additionalProperties": false,
                   "properties": {
-                    "action": {
-                      "type": "string"
-                    },
-                    "actor": {
-                      "type": "string"
-                    },
                     "call": {
-                      "description": "Function name, no parentheses",
+                      "description": "Function name on the callee, no parentheses",
                       "type": "string"
                     },
                     "callee": {
-                      "description": "Component id being called",
+                      "description": "Component id being called, or 'user'/'external'",
                       "type": "string"
                     },
                     "caller": {
-                      "description": "Component id initiating the call",
-                      "type": "string"
-                    },
-                    "expects": {
+                      "description": "Component id initiating the call, or 'user'/'external'",
                       "type": "string"
                     },
                     "fields": {
+                      "description": "Field references passed/returned, e.g. User.id, Order.total",
                       "items": {
-                        "type": "string"
-                      },
-                      "type": "array"
-                    },
-                    "provides": {
-                      "items": {
+                        "pattern": "^[A-Z][a-zA-Z0-9]*\\.[a-z_][a-zA-Z0-9_]*$",
                         "type": "string"
                       },
                       "type": "array"
                     }
                   },
-                  "required": [],
+                  "required": [
+                    "caller",
+                    "callee",
+                    "call",
+                    "fields"
+                  ],
                   "type": "object"
                 },
                 "type": "array"

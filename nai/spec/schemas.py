@@ -108,15 +108,16 @@ INTERFACES_SCHEMA = {
                             "id": {"type": "string", "pattern": "^S[0-9]+$"},
                             "title": {"type": "string"},
                             "steps": {"type": "array", "items": {
-                                "type": "object", "required": [],
+                                "type": "object", "required": ["caller", "callee", "call", "fields"],
                                 "additionalProperties": False, "properties": {
-                                    "caller": {"type": "string", "description": "Component id initiating the call"},
-                                    "callee": {"type": "string", "description": "Component id being called"},
-                                    "call": {"type": "string", "description": "Function name, no parentheses"},
-                                    "fields": {"type": "array", "items": {"type": "string"}},
-                                    "actor": {"type": "string"}, "action": {"type": "string"},
-                                    "expects": {"type": "string"},
-                                    "provides": {"type": "array", "items": {"type": "string"}},
+                                    "caller": {"type": "string", "description": "Component id initiating the call, or 'user'/'external'"},
+                                    "callee": {"type": "string", "description": "Component id being called, or 'user'/'external'"},
+                                    "call": {"type": "string", "description": "Function name on the callee, no parentheses"},
+                                    "fields": {
+                                        "type": "array",
+                                        "description": "Field references passed/returned, e.g. User.id, Order.total",
+                                        "items": {"type": "string", "pattern": "^[A-Z][a-zA-Z0-9]*\\.[a-z_][a-zA-Z0-9_]*$"},
+                                    },
                                 }}}}
                         }}}
             }}

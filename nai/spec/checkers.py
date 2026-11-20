@@ -17,8 +17,8 @@ class Finding:
         return f"{self.file}:{self.line}: {self.severity.upper()}: [{self.code}] {self.message}"
 
 def _step_caller(step: dict[str, Any]) -> str:
-    """SPEC-3: explicit caller, with legacy actor fallback."""
-    return str(step.get("caller") or step.get("actor") or "")
+    """SPEC-3: caller is an explicit, required field."""
+    return str(step.get("caller") or "")
 
 
 def _step_callee(step: dict[str, Any]) -> str:
@@ -26,28 +26,13 @@ def _step_callee(step: dict[str, Any]) -> str:
 
 
 def _step_call(step: dict[str, Any]) -> str:
-    """SPEC-3: explicit call name, with legacy regex fallback from action."""
-    explicit = str(step.get("call") or "").strip()
-    if explicit:
-        return explicit.split("(", 1)[0].strip()
-    match = re.search(r"(\w+)\s*\(", str(step.get("action") or ""))
-    return match.group(1) if match else ""
+    """SPEC-3: call is an explicit, required field (function name, no parentheses)."""
+    return str(step.get("call") or "").split("(", 1)[0].strip()
 
 
-def _step_produced_fields(step: dict[str, Any]) -> list[str]:
-    """Fields produced by a step: explicit `fields`, else legacy `provides`."""
-    fields = [str(f) for f in (step.get("fields") or [])]
-    if fields:
-        return fields
-    return [str(f) for f in (step.get("provides") or [])]
-
-
-def _step_consumed_fields(step: dict[str, Any]) -> list[str]:
-    """Fields consumed by a step: explicit `fields`, else legacy `expects` regex."""
-    fields = [str(f) for f in (step.get("fields") or [])]
-    if fields:
-        return fields
-    return re.findall(r"(\w+\.\w+)", str(step.get("expects") or ""))
+def _step_fields(step: dict[str, Any]) -> list[str]:
+    """SPEC-3: fields is an explicit, required array of Entity.field references."""
+    return [str(f) for f in (step.get("fields") or [])]
 
 
 def check_interfaces(contract: dict[str, Any]) -> list[Finding]:
@@ -55,33 +40,40 @@ def check_interfaces(contract: dict[str, Any]) -> list[Finding]:
     entities = {e["name"]: e for e in contract.get("entities", [])}
     components = {c["name"]: c for c in contract.get("components", [])}
     scenarios = contract.get("scenarios", [])
-    field_producers: dict[str, list[str]] = defaultdict(list)
+    # A field is producible when its entity is an external input or some
+    # component function that appears as a scenario callee returns that entity.
+    external_names = {e.get("name") for e in contract.get("external_inputs", [])}
+    used_callees = {_step_callee(s) for sc in scenarios for s in sc.get("steps", [])}
+    producible_entities = set(external_names)
+    for name in used_callees:
+        comp = components.get(name, {})
+        for provided in comp.get("provides", []):
+            ret = str(provided.get("returns") or "").strip()
+            if ret in entities:
+                producible_entities.add(ret)
     for scenario in scenarios:
         for step_idx, step in enumerate(scenario.get("steps", [])):
             actor = _step_caller(step)
             if actor not in components and actor not in ("user", "external"):
                 findings.append(Finding("contract.json", 0, "error", "SPEC3_UNKNOWN_ACTOR", f"Scenario {scenario['id']} step {step_idx}: unknown actor '{actor}'"))
-            # SPEC-3: use explicit callee + call when present; fall back to legacy action regex.
-            callee = _step_callee(step) or actor
+            callee = _step_callee(step)
+            if callee and callee not in components and callee not in ("user", "external"):
+                findings.append(Finding("contract.json", 0, "error", "SPEC3_UNKNOWN_CALLEE", f"Scenario {scenario['id']} step {step_idx}: unknown callee '{callee}'"))
             func_name = _step_call(step)
-            if actor in components and func_name:
-                prov_names = [p["name"] for p in components.get(callee, components.get(actor, {})).get("provides", [])]
+            if callee in components and func_name:
+                prov_names = [p["name"] for p in components[callee].get("provides", [])]
                 if func_name not in prov_names:
                     findings.append(Finding("contract.json", 0, "error", "SPEC3_MISSING_CALL", f"Scenario {scenario['id']} step {step_idx}: '{callee}' calls '{func_name}' not in provides"))
-            for field in _step_produced_fields(step):
-                field_producers[field].append(f"{scenario['id']}:{step_idx}")
+            for field_ref in _step_fields(step):
+                if field_ref.split(".")[0] not in producible_entities:
+                    findings.append(Finding("contract.json", 0, "error", "SPEC3_MISSING_PROVIDER", f"Scenario {scenario['id']} step {step_idx}: field '{field_ref}' has no producer"))
     for scenario in scenarios:
         for step_idx, step in enumerate(scenario.get("steps", [])):
-            for field_ref in _step_consumed_fields(step):
-                if field_ref not in field_producers:
-                    findings.append(Finding("contract.json", 0, "error", "SPEC3_MISSING_PROVIDER", f"Scenario {scenario['id']} step {step_idx}: consumed field '{field_ref}' has no producer"))
-    for scenario in scenarios:
-        for step_idx, step in enumerate(scenario.get("steps", [])):
-            for field in _step_produced_fields(step):
+            for field in _step_fields(step):
                 consumed = False
                 for s2 in scenarios:
                     for step2 in s2.get("steps", []):
-                        if field in _step_produced_fields(step2) or field in _step_consumed_fields(step2):
+                        if field in _step_fields(step2):
                             consumed = True
                             break
                     if consumed:
@@ -96,7 +88,7 @@ def check_interfaces(contract: dict[str, Any]) -> list[Finding]:
                         findings.append(Finding("contract.json", 0, "warning", "SPEC3_UNCONSUMED_FIELD", f"Scenario {scenario['id']} step {step_idx}: produced field '{field}' has no consumer"))
     for scenario in scenarios:
         for step_idx, step in enumerate(scenario.get("steps", [])):
-            for field in _step_produced_fields(step) + _step_consumed_fields(step):
+            for field in _step_fields(step):
                 entity_name = field.split(".")[0]
                 if entity_name not in entities:
                     findings.append(Finding("contract.json", 0, "error", "SPEC3_MISSING_ENTITY", f"Scenario {scenario['id']} step {step_idx}: references unknown entity '{entity_name}'"))

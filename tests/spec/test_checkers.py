@@ -10,28 +10,28 @@ def test_check_interfaces_pass(sample_contract):
 
 def test_check_interfaces_missing_provider(sample_contract):
     contract = sample_contract.copy()
-    contract["scenarios"][0]["steps"].append({"actor": "orders", "action": "ship(Order.id)", "expects": "Shipment.tracking", "provides": []})
+    contract["scenarios"][0]["steps"].append({"caller": "orders", "callee": "orders", "call": "ship", "fields": ["MissingEntity.tracking"]})
     findings = check_interfaces(contract)
     errors = [f for f in findings if f.severity == "error" and f.code == "SPEC3_MISSING_PROVIDER"]
     assert len(errors) > 0
 
 def test_check_interfaces_missing_call(sample_contract):
     contract = sample_contract.copy()
-    contract["scenarios"][0]["steps"][0]["action"] = "nonexistent()"
+    contract["scenarios"][0]["steps"][0]["call"] = "nonexistent"
     findings = check_interfaces(contract)
     errors = [f for f in findings if f.severity == "error" and f.code == "SPEC3_MISSING_CALL"]
     assert len(errors) > 0
 
-def test_check_interfaces_unknown_actor(sample_contract):
+def test_check_interfaces_unknown_caller(sample_contract):
     contract = sample_contract.copy()
-    contract["scenarios"][0]["steps"][0]["actor"] = "unknown_component"
+    contract["scenarios"][0]["steps"][0]["caller"] = "unknown_component"
     findings = check_interfaces(contract)
     errors = [f for f in findings if f.severity == "error" and f.code == "SPEC3_UNKNOWN_ACTOR"]
     assert len(errors) > 0
 
 def test_check_interfaces_missing_entity(sample_contract):
     contract = sample_contract.copy()
-    contract["scenarios"][0]["steps"][0]["expects"] = "NonExistent.field"
+    contract["scenarios"][0]["steps"][0]["fields"] = ["NonExistent.field"]
     findings = check_interfaces(contract)
     errors = [f for f in findings if f.severity == "error" and f.code == "SPEC3_MISSING_ENTITY"]
     assert len(errors) > 0

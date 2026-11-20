@@ -15,9 +15,9 @@ Output ONLY valid JSON matching the CheckInterfacesOutput schema:
 
 Rules:
 1. For each scenario step, verify:
-   - The actor exists as a component or external input
-   - The action names a function that exists in the actor's provides (or is an external input)
-   - All fields mentioned in expects/provides exist in the relevant entity
+   - The caller and callee are components or "user"/"external"
+   - The call names a function that exists in the callee's provides
+   - All fields in the step's fields array are Entity.field references whose entity exists and is producible
    - Every entity field consumed has a producer (component or external input)
    - Every entity field produced has a consumer (component or external output)
    - Every component appears in at least one scenario step

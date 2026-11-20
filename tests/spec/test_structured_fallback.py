@@ -91,17 +91,35 @@ def test_explicit_scenario_fields_are_checked():
     assert "SPEC3_MISSING_CALL" in codes  # explicit call caught without regex
 
 
-def test_legacy_scenario_fields_still_work():
+def test_explicit_scenario_fields_valid():
     contract = {
         "entities": [{"name": "User", "fields": [{"name": "id", "type": "int"}]}],
         "components": [
-            {"name": "auth", "provides": [{"name": "login", "signature": "login()"}]},
+            {"name": "auth", "provides": [{"name": "login", "signature": "login()", "returns": "User"}]},
         ],
         "scenarios": [{
             "id": "S1", "title": "Login", "steps": [
-                {"actor": "auth", "action": "login()", "expects": "User.id", "provides": ["User.id"]},
+                {"caller": "user", "callee": "auth", "call": "login", "fields": ["User.id"]},
             ],
         }],
     }
     errors = [f for f in check_interfaces(contract) if f.severity == "error"]
     assert errors == []
+
+
+def test_schema_rejects_legacy_step_fields():
+    import jsonschema
+    from nai.spec.schemas import INTERFACES_SCHEMA
+    legacy = {
+        "contract": {
+            "entities": [{"name": "User", "fields": [{"name": "id", "type": "int"}]}],
+            "components": [{"name": "auth", "provides": [], "consumes": []}],
+            "scenarios": [{
+                "id": "S1", "title": "Login", "steps": [
+                    {"actor": "auth", "action": "login()", "expects": "User.id"},
+                ],
+            }],
+        },
+    }
+    with pytest.raises(Exception):
+        jsonschema.validate(legacy, INTERFACES_SCHEMA)
