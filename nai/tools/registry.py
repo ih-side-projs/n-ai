@@ -217,6 +217,17 @@ class ToolRegistry:
         spec = self._tools.get(name)
         if not spec:
             return f"ERROR: Unknown tool: {name}"
+        # Tool families keep the active sandbox in their module globals (TLS-5).
+        # Install the caller's sandbox on every loaded family before invoking.
+        if sandbox is not None:
+            import sys
+            for mod_name, mod in list(sys.modules.items()):
+                if mod_name.startswith('nai.tools.families.') and hasattr(mod, 'set_sandbox'):
+                    try:
+                        mod.set_sandbox(sandbox)
+                    except Exception:
+                        pass
+
         
         # Validate arguments against schema (basic validation)
         try:

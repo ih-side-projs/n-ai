@@ -66,5 +66,6 @@ class ServiceConfig:
         env["NAI_DB_PATH"] = str(self.effective_db_path)
         env["NAI_WEB_HOST"] = self.web_host
         env["NAI_WEB_PORT"] = str(self.web_port)
-        env.setdefault("NAI_RUNNER_STATUS_FILE", str(self.state_dir / "runner-status.json"))
+        # SCH-9 writes runner.json into the runner's state dir (same as state_dir here)
+        env.setdefault("NAI_RUNNER_STATUS_FILE", str(self.state_dir / "runner.json"))
         return env

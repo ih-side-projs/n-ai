@@ -25,6 +25,9 @@
           <form method="post" action="/tools/call" class="tool-try-form" data-tool="{{ tool.name }}">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
             <input type="hidden" name="tool_name" value="{{ tool.name }}">
+            <label class="tiny muted">Sandbox workspace (optional)
+              <input type="text" name="workspace" class="small-input" placeholder="default: .nai/tools-workspace">
+            </label>
             <textarea name="arguments" class="json-textarea" rows="6" placeholder='{"param": "value"}'>{}</textarea>
             <button type="submit" class="button secondary small">Execute</button>
           </form>

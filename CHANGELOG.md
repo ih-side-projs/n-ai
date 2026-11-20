@@ -7,8 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Web tools page now executes registered tools through the shared registry in a sandbox (previously echoed arguments).
+- "New project" form now has a working `/projects/create` route that creates the project and root node.
+- Dashboard runner status now reads `runner.json`, matching what SCH-9 actually writes.
+- CSRF middleware replays the request body so form endpoints can bind `Form(...)` parameters.
+
 ### Added
 
+- Web `/service` page: supervisor status, child restart, nai job submission/cancel and log viewing.
+- Web `/projects/{id}/settings` page for X9 limits, budgets, test commands, backup location and target language (WEB-12).
 - Thin `nai service` supervisor: starts and watches the web dashboard and runner,
   tracks on-demand `nai` instances, exposes a local JSON control socket, and
   provides `start|stop|restart|status|logs|exec|jobs|cancel|shell` commands.

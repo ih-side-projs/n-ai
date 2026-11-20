@@ -25,7 +25,9 @@ Open <http://127.0.0.1:8080>. OpenAPI docs are at `/api/docs`.
 | `/projects/{id}/nodes/{nid}/edit` | Spec editor plus unified diff against last approval |
 | `/approvals` | Pending approvals with approve/reject forms |
 | `/escalations` | Escalated and failed nodes with retry / mark-stale |
-| `/tools` | Registered tool catalog with schemas and try-it forms |
+| `/tools` | Registered tool catalog with schemas and working try-it forms (executes tools in a sandbox) |
+| `/service` | Supervisor status, child restart, nai job submission/cancel, logs |
+| `/projects/{id}/settings` | X9 limits, token budget, test commands, backup location, target language |
 | `/models` | Model profiles, `/v1/models` + `/running` status, smoke test |
 | `/projects/{id}/logs` | Stored events and live SSE stream |
 | `/projects/{id}/metrics` | Tokens, wall time, success rate, retry stats, daily trend |

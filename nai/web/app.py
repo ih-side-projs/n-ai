@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import html
 import json
 import mimetypes
 import os
@@ -132,9 +133,17 @@ def create_app(
                 verify_same_origin(request)
                 supplied = request.headers.get("x-csrf-token")
                 if not supplied:
+                    # Read the form for CSRF, then replay the raw body so the
+                    # endpoint can still bind Form(...) parameters.
+                    raw = await request.body()
                     form = await request.form()
                     request.state.parsed_form = form
                     supplied = str(form.get("csrf_token") or "")
+
+                    async def replay_receive():
+                        return {"type": "http.request", "body": raw, "more_body": False}
+
+                    request._receive = replay_receive
                 verify_token(csrf_cookie, supplied)
             except HTTPException as exc:
                 return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
@@ -182,7 +191,9 @@ def create_app(
         return project, node
 
     def runner_status() -> dict[str, Any]:
-        path = settings.runner_status_file or (settings.database_path.parent / "runner-status.json")
+        # Runner (SCH-9) writes runner.json into its state dir, which defaults
+        # to the database's folder. Match that default exactly.
+        path = settings.runner_status_file or (settings.database_path.parent / "runner.json")
         if not path.is_file():
             return {"status": "not-reported", "message": "Runner heartbeat is not available yet (WP3 integration)."}
         try:
@@ -287,6 +298,23 @@ def create_app(
     def projects_page(request: Request, store: Store = Depends(get_store)):
         projects = [project_summary(store, p) for p in store.list_projects()]
         return render(request, "projects.html", {"projects": projects, "active_page": "projects"})
+
+    @app.post("/projects/create")
+    async def projects_create(request: Request, name: str = Form(...), brief: str = Form("")):
+        """Create a project and its root spec node (WEB-1 intake via the runner-owned store)."""
+        name = name.strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="Project name is required")
+        if not settings.database_path.is_file():
+            raise HTTPException(status_code=503, detail="N-AI database not found")
+        store = Store(settings.database_path, read_only=False)
+        try:
+            pid = store.create_project(name, brief.strip(), settings={})
+            store.create_node(pid, "root", "system", objective=brief.strip() or f"Root specification for {name}")
+            store.record_event(pid, "project.created_via_web", f"Project '{name}' created from the dashboard", level="info")
+        finally:
+            store.close()
+        return RedirectResponse(url=f"/projects/{pid}", status_code=303)
 
     @app.get("/projects/{project_id}", response_class=HTMLResponse)
     def project_page(project_id: str, request: Request, store: Store = Depends(get_store)):
@@ -479,6 +507,54 @@ def create_app(
 
     # --- WP8 additions: approvals, escalations, tools ---
 
+    @app.get("/projects/{project_id}/settings", response_class=HTMLResponse)
+    def project_settings_page(project_id: str, request: Request, store: Store = Depends(get_store)):
+        project = store.get_project(project_id)
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+        settings = project.get("settings") or {}
+        return templates.TemplateResponse(request=request, name="settings.html",
+            context={"request": request, "csrf_token": request.state.csrf_token,
+                     "project": project, "settings": settings, "active_page": "projects"})
+
+    @app.post("/projects/{project_id}/settings")
+    async def project_settings_save(
+        project_id: str, request: Request,
+        max_requirements: int = Form(8), max_functions: int = Form(10),
+        max_components: int = Form(7), max_depth: int = Form(4),
+        budget_limit_tokens: int = Form(0), test_commands: str = Form(""),
+        backup_location: str = Form(""), target_language: str = Form("Python 3.12"),
+    ):
+        store = Store(settings.database_path, read_only=False)
+        try:
+            project = store.get_project(project_id)
+            if not project:
+                raise HTTPException(status_code=404, detail="Project not found")
+            current = dict(project.get("settings") or {})
+            limits = dict(current.get("size_limits") or current)
+            limits.update({
+                "max_requirements_per_component": max_requirements,
+                "max_public_functions_per_component": max_functions,
+                "max_components_per_level": max_components,
+                "max_depth": max_depth,
+            })
+            current.update({
+                "max_requirements_per_component": max_requirements,
+                "max_public_functions_per_component": max_functions,
+                "max_components_per_level": max_components,
+                "max_depth": max_depth,
+                "budget_limit_tokens": budget_limit_tokens or None,
+                "test_commands": [c.strip() for c in test_commands.splitlines() if c.strip()],
+                "backup_location": backup_location.strip() or None,
+                "target_env": {**(current.get("target_env") or {}), "language": target_language},
+            })
+            store.update_project(project_id, settings=current)
+            store.record_event(project_id, "project.settings_updated", "Project settings updated via dashboard",
+                               level="info", data={"limits": limits})
+        finally:
+            store.close()
+        return RedirectResponse(url=f"/projects/{project_id}/settings", status_code=303)
+
     @app.get("/approvals", response_class=HTMLResponse)
     def approvals_page(request: Request, store: Store = Depends(get_store)):
         pending = []
@@ -519,6 +595,78 @@ def create_app(
                     escalated.append({"project": p, "node": n})
         return {"escalations": escalated}
 
+    def _service_socket() -> Path | None:
+        import os
+
+        state = Path(os.environ.get("NAI_STATE_DIR", settings.database_path.parent)).expanduser().resolve()
+        sock = state / "service.sock"
+        return sock if sock.exists() else None
+
+    def _service_call(cmd: str, **kwargs: Any) -> dict[str, Any]:
+        from nai.service.protocol import request as service_request
+
+        sock = _service_socket()
+        if not sock:
+            raise RuntimeError("Service supervisor is not running")
+        resp = service_request(sock, cmd, **kwargs)
+        if not resp.get("ok"):
+            raise RuntimeError(resp.get("error") or "service command failed")
+        return resp.get("data") or {}
+
+    @app.get("/service", response_class=HTMLResponse)
+    def service_page(request: Request):
+        try:
+            data = _service_call("status")
+        except Exception as exc:  # noqa: BLE001
+            data = {"running": False, "error": str(exc), "children": {}, "jobs": {}}
+        return templates.TemplateResponse(request=request, name="service.html",
+            context={"request": request, "csrf_token": request.state.csrf_token,
+                     "service": data, "active_page": "service"})
+
+    @app.get("/service/logs/{name}")
+    def service_logs(name: str, request: Request):
+        try:
+            text = _service_call("logs", name=name, lines=200)
+        except Exception as exc:  # noqa: BLE001
+            text = f"ERROR: {exc}"
+        return HTMLResponse(
+            '<!doctype html><html><head><title>nai service log</title>'
+            '<link rel="stylesheet" href="/static/app.css"></head><body><main class="container">'
+            f'<div class="page-heading"><h1>Log: {name}</h1><a class="button secondary" href="/service">Back</a></div>'
+            f'<pre class="code-block">{html.escape(text)}</pre></main></body></html>'
+        )
+
+    @app.post("/service/control")
+    async def service_control(request: Request, action: str = Form(...), target: str = Form(""),
+                              argv: str = Form("")):
+        try:
+            if action == "stop":
+                data = _service_call("stop")
+            elif action == "restart":
+                data = _service_call("restart", name=target)
+            elif action == "exec":
+                data = _service_call("exec", argv=argv.split(), name=target or None)
+            elif action == "cancel":
+                data = _service_call("cancel", id=target)
+            else:
+                raise ValueError(f"unknown action: {action}")
+            msg = f"Service action '{action}' completed: {data}"
+            level = "success"
+        except Exception as exc:  # noqa: BLE001
+            msg = f"Service action failed: {exc}"
+            level = "error"
+        return HTMLResponse(
+            f'<div class="notice {level}" role="status">{msg} '
+            '<a href="/service">Refresh</a></div>'
+        )
+
+    @app.get("/api/service")
+    def api_service():
+        try:
+            return {"running": True, **_service_call("status")}
+        except Exception as exc:  # noqa: BLE001
+            return {"running": False, "error": str(exc)}
+
     @app.get("/tools", response_class=HTMLResponse)
     def tools_page(request: Request, store: Store = Depends(get_store)):
         from collections import defaultdict
@@ -550,14 +698,36 @@ def create_app(
 
     @app.post("/tools/call")
     async def tools_call(request: Request, tool_name: str = Form(...), arguments: str = Form("{}"),
+                         workspace: str | None = Form(None),
                          store: Store = Depends(get_store)):
+        """Execute a registered tool through the same registry the MCP server uses.
+
+        The tool runs in a sandbox rooted at the chosen workspace (default: the
+        web process state dir). Errors come back as `ERROR:` strings (X3).
+        """
         try:
             args = json.loads(arguments)
-        except json.JSONDecodeError:
-            raise HTTPException(status_code=400, detail="Invalid JSON arguments")
+            if not isinstance(args, dict):
+                raise ValueError("arguments must be a JSON object")
+        except (json.JSONDecodeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid JSON arguments: {exc}") from exc
+
+        try:
+            from nai.tools.registry import get_registry
+            from nai.tools.sandbox import Sandbox
+
+            ws_root = Path(workspace).expanduser().resolve() if workspace else settings.database_path.parent / "tools-workspace"
+            ws_root.mkdir(parents=True, exist_ok=True)
+            sandbox = Sandbox(ws_root)
+            registry = get_registry()
+            result = registry.call_tool(tool_name, args, sandbox)
+            is_error = result.startswith("ERROR:")
+        except Exception as exc:  # noqa: BLE001 - tool failures are reported as data
+            result = f"ERROR: {type(exc).__name__}: {exc}"
+            is_error = True
         return JSONResponse({"tool": tool_name, "arguments": args,
-                             "result": f"Tool execution would be proxied to MCP server. Arguments: {json.dumps(args)}",
-                             "isError": False})
+                             "result": result, "isError": is_error,
+                             "workspace": str(ws_root)})
 
     def _writable_store() -> Store:
         if not settings.database_path.is_file():
