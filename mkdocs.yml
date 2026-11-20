@@ -37,6 +37,7 @@ nav:
       - Configuration: configuration.md
       - CLI reference: cli-reference.md
       - API reference: api-reference.md
+      - Service / daemon: service.md
       - Testing: testing.md
   - Subsystems:
       - Overview: subsystems/index.md

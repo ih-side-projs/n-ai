@@ -53,6 +53,7 @@ and requirement IDs (CORE-1, STO-3, SCH-7, SPEC-3, ...).
 | **SS-TOOLS** | One registry feeding both OpenAI-style tool schemas and an MCP server over stdio |
 | **SS-WEB** | Local FastAPI dashboard: project tree, approvals, editing, controls, logs (SSE), metrics, tools |
 | **SS-EVAL** | Benchmark suites, scripted stub model server, `nai bench`, JSON/Markdown reports |
+| **Service** | Thin supervisor for web + runner + on-demand `nai` instances, with a CLI and local control socket |
 
 ## Architecture
 
@@ -123,6 +124,8 @@ Console scripts after installation:
 | `nai mcp -w DIR` | MCP server over stdio for the tool registry |
 | `nai-web` | local web dashboard (or `NAI_WEB_PORT=... python -m nai.web`) |
 | `nai-bench --profile NAME` | run benchmark suites and write reports |
+| `nai service start\|status\|stop` | manage the background service (web + runner) |
+| `nai service exec SPEC.md` | submit a new `nai` instance to the service |
 | `python devswarm.py SPEC.md` | original v1 entry point |
 
 Detailed flags: [CLI reference](docs/cli-reference.md).
@@ -192,7 +195,7 @@ Full documentation is in [`docs/`](docs/index.md):
 - [Installation](docs/installation.md) · [Quick start](docs/quickstart.md)
 - [Architecture](docs/architecture.md) · [Configuration](docs/configuration.md)
 - [CLI reference](docs/cli-reference.md) · [API reference](docs/api-reference.md)
-- [Subsystems](docs/subsystems/index.md) · [Testing](docs/testing.md)
+- [Service / daemon](docs/service.md) · [Subsystems](docs/subsystems/index.md) · [Testing](docs/testing.md)
 - [Troubleshooting](docs/troubleshooting.md) · [FAQ](docs/faq.md)
 - [Overall specification](docs/specification.md)
 

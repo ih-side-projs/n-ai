@@ -41,6 +41,24 @@ Python owns control flow and state. A model never decides which file to read,
 which job runs next, or whether tests passed. Models are called only for narrow
 jobs with schemas and validation (X1, X2).
 
+## Service supervisor
+
+For unattended operation, `nai service` runs a thin supervisor that spawns and
+watches the existing entry points as child processes — it contains no pipeline
+logic of its own:
+
+```
+nai service start
+├── python -m nai.web --host ... --port ...     (dashboard)
+├── python -m nai run --db ...                  (runner)
+└── python -m nai <args>                        (submitted jobs, on demand)
+    ↑ control: Unix socket .nai/service.sock (JSON lines)
+```
+
+It provides process lifecycle (start/stop/restart with backoff), per-child logs,
+graceful shutdown of process groups, a single-instance lock, and a CLI plus
+interactive shell for submitting new `nai` instances. See [Service](service.md).
+
 ## Lifecycle
 
 1. **Intake** — a brief is stored as a project; the root spec node is created.

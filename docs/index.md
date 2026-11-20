@@ -13,6 +13,7 @@ specification and then into a tested codebase using locally served LLMs.
 ## Reference
 
 - [CLI reference](cli-reference.md) — every console command and its flags
+- [Service / daemon](service.md) — run web + runner as a managed service
 - [API reference](api-reference.md) — public Python interfaces
 - [Subsystems](subsystems/index.md) — one page per subsystem
 - [Overall specification](specification.md) — requirement IDs and design rules

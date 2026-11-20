@@ -36,6 +36,7 @@ nai = "nai.cli:main"
 nai-web = "nai.web.server:main"
 nai-mcp = "nai.tools.cli:mcp_main"
 nai-bench = "nai.eval.cli:bench_main"
+nai-service = "nai.service.cli:service_main"
 
 [tool.setuptools.packages.find]
 include = ["nai*"]

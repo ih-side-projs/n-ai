@@ -9,10 +9,30 @@
 | `nai mcp` | `nai.tools.cli:mcp_main` | MCP server (stdio) |
 | `nai-web` | `nai.web.server:main` | local FastAPI dashboard |
 | `nai-bench` | `nai.eval.cli:bench_main` | benchmark runner |
+| `nai-service` | `nai.service.cli:service_main` | service supervisor control CLI |
 
 Subcommands are registered through `nai.cli.register_subcommand()`; `python -m nai`
 uses the same dispatcher as the `nai` script. `python devswarm.py` is the original
 v1 entry point.
+
+## `nai service` — background service
+
+```
+nai service start [--foreground] [--no-web] [--no-runner]
+nai service status [--json]
+nai service stop
+nai service restart [web|runner|job-id]
+nai service logs [web|runner|service|job-id] [-n N]
+nai service exec [--name ID] <nai arguments>
+nai service jobs
+nai service cancel ID
+nai service shell
+```
+
+`start` is detached by default; `--foreground` runs the supervisor in the
+current terminal (use this under systemd/launchd). `exec` submits a new
+`python -m nai <args>` instance as a tracked job. `shell` is an interactive
+submission shell. See [Service / daemon](service.md).
 
 ## `nai` — build from a spec
 

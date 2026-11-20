@@ -1,0 +1,28 @@
+[Unit]
+Description=nai (N-AI) local spec-to-code service
+Documentation=https://github.com/ih-side-projs/n-ai
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=%i
+WorkingDirectory=/home/%i/Projects/nai
+Environment=NAI_STATE_DIR=/home/%i/Projects/nai/.nai
+Environment=NAI_DB_PATH=/home/%i/Projects/nai/.nai/nai.sqlite3
+Environment=NAI_WEB_HOST=127.0.0.1
+Environment=NAI_WEB_PORT=8080
+ExecStart=/home/%i/Projects/nai/.venv/bin/python -m nai.service.daemon --state-dir /home/%i/Projects/nai/.nai
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=5
+KillMode=mixed
+TimeoutStopSec=30
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/%i/Projects/nai
+
+[Install]
+WantedBy=multi-user.target

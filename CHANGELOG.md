@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Thin `nai service` supervisor: starts and watches the web dashboard and runner,
+  tracks on-demand `nai` instances, exposes a local JSON control socket, and
+  provides `start|stop|restart|status|logs|exec|jobs|cancel|shell` commands.
+- `nai-service` console script and systemd/launchd deployment examples under `deploy/`.
+- `nai web` now accepts `--host`, `--port` and `--db` flags.
+
 ### Planned
 
 - Optional tool families beyond the stdlib set (markdown, Excel, Word, PDF, charts)

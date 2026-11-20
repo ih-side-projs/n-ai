@@ -1,6 +1,8 @@
-"""Main entry point for WP8 web interface."""
+"""Main entry point for the web dashboard."""
+
+import sys
 
 from .server import main
 
 if __name__ == "__main__":
-    main()
+    main(sys.argv[1:])
