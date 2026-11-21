@@ -193,7 +193,7 @@ See [Testing](docs/testing.md).
 Full documentation is in [`docs/`](docs/index.md):
 
 - [Installation](docs/installation.md) · [Quick start](docs/quickstart.md)
-- [Architecture](docs/architecture.md) · [Configuration](docs/configuration.md)
+- [Architecture](docs/architecture.md) · [Workflow phases](docs/workflow-phases.md) · [Configuration](docs/configuration.md)
 - [CLI reference](docs/cli-reference.md) · [API reference](docs/api-reference.md)
 - [Service / daemon](docs/service.md) · [Subsystems](docs/subsystems/index.md) · [Testing](docs/testing.md)
 - [Troubleshooting](docs/troubleshooting.md) · [FAQ](docs/faq.md)

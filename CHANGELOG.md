@@ -16,6 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Named workflow phases: `nai.workflow` derives `design` / `implementation` per node from status and job history; projects report `design`, `implementation` or `mixed` (phases may overlap).
+- Web Design / Implementation tabs with filtered spec tree, phase badges and explanatory banners; `/api/projects/{id}/phase` API.
 - Web `/service` page: supervisor status, child restart, nai job submission/cancel and log viewing.
 - Web `/projects/{id}/settings` page for X9 limits, budgets, test commands, backup location and target language (WEB-12).
 - Thin `nai service` supervisor: starts and watches the web dashboard and runner,

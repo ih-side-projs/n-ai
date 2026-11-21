@@ -5,8 +5,25 @@
 <div class="breadcrumbs"><a href="/">Projects</a><span>/</span>{{ project.name }}</div>
 <div class="page-heading">
   <div><p class="eyebrow">PROJECT OVERVIEW</p><h1>{{ project.name }}</h1><p class="muted">{{ project.id }} · {{ project.status }}</p></div>
+  <span class="phase-badge phase-{{ project.phase }}">{{ project.phase|capitalize }}</span>
   <span class="status status-{{ project.status }}">{{ project.status }}</span>
 </div>
+<nav class="phase-tabs" aria-label="Workflow phase">
+  <a href="/projects/{{ project.id }}?phase=all" class="phase-tab {% if selected_phase == 'all' %}active{% endif %}">All <span class="count-pill">{{ project.total }}</span></a>
+  <a href="/projects/{{ project.id }}?phase=design" class="phase-tab {% if selected_phase == 'design' %}active{% endif %}">Design <span class="count-pill">{{ project.design_count }}</span></a>
+  <a href="/projects/{{ project.id }}?phase=implementation" class="phase-tab {% if selected_phase == 'implementation' %}active{% endif %}">Implementation <span class="count-pill">{{ project.implementation_count }}</span></a>
+</nav>
+{% if selected_phase == 'design' %}
+<div class="phase-banner phase-banner-design">
+  <strong>Design phase</strong> — you are iterating on requirements, specifications and contracts.
+  Review and approve each level before implementation continues. Changes here may mark downstream nodes stale.
+</div>
+{% elif selected_phase == 'implementation' %}
+<div class="phase-banner phase-banner-implementation">
+  <strong>Implementation phase</strong> — code, tests and integration are being produced and verified.
+  Toggle to Design at any time; the two phases may overlap.
+</div>
+{% endif %}
 <section class="summary-grid">
   <article class="panel metric-card"><span class="metric-label">Completion</span><strong class="metric-value">{{ project.percent_done }}%</strong><div class="progress-line" role="progressbar" aria-label="Project completion" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{ project.percent_done }}"><span style="width: {{ project.percent_done }}%"></span></div><span class="tiny muted">{{ project.node_counts.get('done', 0) }} of {{ project.node_count }} nodes done</span></article>
   <article class="panel metric-card"><span class="metric-label">Node status</span><strong class="metric-value">{{ project.node_count }}</strong><span class="tiny muted">{{ project.node_counts.get('running', 0) }} running · {{ project.node_counts.get('failed', 0) }} failed</span></article>

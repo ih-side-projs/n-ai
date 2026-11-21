@@ -95,6 +95,47 @@ class TestServicePage:
         assert r.json()["running"] is False
 
 
+class TestWorkflowPhases:
+    async def test_project_page_phase_tabs(self, client, initialized_store):
+        pid = initialized_store.conn.execute("SELECT id FROM projects LIMIT 1").fetchone()[0]
+        r = await client.get(f"/projects/{pid}")
+        assert r.status_code == 200
+        assert 'phase-tab' in r.text
+        assert 'Design' in r.text
+        assert 'Implementation' in r.text
+
+    async def test_design_tab_shows_banner(self, client, initialized_store):
+        pid = initialized_store.conn.execute("SELECT id FROM projects LIMIT 1").fetchone()[0]
+        r = await client.get(f"/projects/{pid}?phase=design")
+        assert r.status_code == 200
+        assert "Design phase" in r.text
+        assert "iterating on requirements" in r.text
+
+    async def test_implementation_tab_shows_banner(self, client, initialized_store):
+        pid = initialized_store.conn.execute("SELECT id FROM projects LIMIT 1").fetchone()[0]
+        r = await client.get(f"/projects/{pid}?phase=implementation")
+        assert r.status_code == 200
+        assert "Implementation phase" in r.text
+
+    async def test_phase_api(self, client, initialized_store):
+        pid = initialized_store.conn.execute("SELECT id FROM projects LIMIT 1").fetchone()[0]
+        r = await client.get(f"/api/projects/{pid}/phase")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["phase"] in ("design", "implementation", "mixed")
+        assert "per_node" in data
+        assert "tree" in data
+
+    async def test_node_page_shows_phase(self, client, initialized_store):
+        pid = initialized_store.conn.execute("SELECT id FROM projects LIMIT 1").fetchone()[0]
+        nid = initialized_store.conn.execute("SELECT id FROM nodes WHERE project_id=? LIMIT 1", (pid,)).fetchone()[0]
+        r = await client.get(f"/projects/{pid}/nodes/{nid}")
+        assert r.status_code == 200
+        assert "PHASE" in r.text
+        r = await client.get(f"/api/projects/{pid}/nodes/{nid}")
+        assert r.json()["phase"] in ("design", "implementation")
+
+
 class TestRunnerHealthPath:
     async def test_runner_health_reads_runner_json(self, client, initialized_store, tmp_path, monkeypatch):
         pid = initialized_store.conn.execute("SELECT id FROM projects LIMIT 1").fetchone()[0]

@@ -8,6 +8,7 @@ specification and then into a tested codebase using locally served LLMs.
 - [Installation](installation.md) — Python, dependencies, local model server
 - [Quick start](quickstart.md) — first run in five minutes
 - [Architecture](architecture.md) — subsystems and control flow
+- [Workflow phases](workflow-phases.md) — design vs implementation (overlapping, derived)
 - [Configuration](configuration.md) — TOML, environment variables, size limits
 
 ## Reference

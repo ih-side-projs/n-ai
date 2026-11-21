@@ -2,7 +2,14 @@
 {% block title %}{{ node.name }}{% endblock %}
 {% block content %}
 <div class="breadcrumbs"><a href="/">Projects</a><span>/</span><a href="/projects/{{ project.id }}">{{ project.name }}</a><span>/</span>{{ node.name }}</div>
-<div class="page-heading"><div><p class="eyebrow">NODE · {{ node.kind }}</p><h1>{{ node.name }}</h1><p class="muted">{{ node.id }}</p></div><span class="status status-{{ node.status }}">{{ node.status }}</span></div>
+<div class="page-heading"><div><p class="eyebrow">NODE · {{ node.kind }} · {{ phase_label|upper }} PHASE</p><h1>{{ node.name }}</h1><p class="muted">{{ node.id }}</p></div><span class="phase-badge phase-{{ phase }}">{{ phase_label }}</span><span class="status status-{{ node.status }}">{{ node.status }}</span></div>
+<div class="phase-banner phase-banner-{{ phase }}">
+  {% if phase == 'design' %}
+  <strong>Design phase</strong> — this node is being specified and approved. Work here shapes the contract its children implement.
+  {% else %}
+  <strong>Implementation phase</strong> — this node is being coded, tested and integrated.
+  {% endif %}
+</div>
 <div class="content-grid">
   <section class="panel span-two"><h2>Specification</h2><div class="markdown-body">{{ spec_html|safe }}</div></section>
   <aside class="panel"><h2>Node details</h2><dl class="compact-dl"><div><dt>Objective</dt><dd>{{ node.objective or '—' }}</dd></div><div><dt>Attempts</dt><dd>{{ node.attempts }}</dd></div><div><dt>Test command</dt><dd><code>{{ node.test_command or '—' }}</code></dd></div><div><dt>Content hash</dt><dd><code class="hash">{{ node.content_hash or '—' }}</code></dd></div><div><dt>Built hash</dt><dd><code class="hash">{{ node.built_hash or '—' }}</code></dd></div><div><dt>Dependencies</dt><dd>{% for dep in node.depends_on %}<code>{{ dep }}</code>{% else %}—{% endfor %}</dd></div></dl></aside>

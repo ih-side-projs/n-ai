@@ -26,6 +26,7 @@ from nai.store import Store
 from .metrics import _all_nodes, build_project_metrics
 from .models import ModelServerClient, ModelServerError
 from .security import new_csrf_token, verify_bearer_or_cookie, verify_same_origin, verify_token
+from ..workflow import DESIGN, IMPLEMENTATION, filter_tree_to_phase, job_phase, node_phase, phase_summary
 
 
 PACKAGE_DIR = Path(__file__).resolve().parent
@@ -255,6 +256,7 @@ def create_app(
             "budget": budget,
             "budget_limit_tokens": budget_limit,
             "budget_percent": budget_percent,
+            **phase_summary(nodes, {nid: [j for j in jobs if j.get("node_id") == nid] for nid in (n["id"] for n in nodes)}),
         }
 
     def node_page_data(store: Store, project_id: str, node: dict[str, Any]) -> dict[str, Any]:
@@ -317,18 +319,30 @@ def create_app(
         return RedirectResponse(url=f"/projects/{pid}", status_code=303)
 
     @app.get("/projects/{project_id}", response_class=HTMLResponse)
-    def project_page(project_id: str, request: Request, store: Store = Depends(get_store)):
+    def project_page(project_id: str, request: Request, phase: str | None = None,
+                     store: Store = Depends(get_store)):
         project = project_summary(store, project_or_404(store, project_id))
         tree = project_tree(store, project_id)
+        # Named workflow phase view: design (specs/approvals) or implementation
+        # (code/tests/integration). "all" (default) keeps both visible.
+        selected_phase = phase if phase in (DESIGN, IMPLEMENTATION) else "all"
+        if selected_phase != "all":
+            tree = filter_tree_to_phase(tree, selected_phase, project.get("per_node"))
         return render(request, "project.html", {"project": project, "tree": tree,
-                      "runner": runner_status(), "active_page": "projects"})
+                      "runner": runner_status(), "active_page": "projects",
+                      "selected_phase": selected_phase,
+                      "phase_constants": {"design": DESIGN, "implementation": IMPLEMENTATION}})
 
     @app.get("/projects/{project_id}/nodes/{node_id}", response_class=HTMLResponse)
     def node_page(project_id: str, node_id: str, request: Request, store: Store = Depends(get_store)):
         project, node = node_or_404(store, project_id, node_id)
         data = node_page_data(store, project_id, node)
+        node_phase_value = node_phase(node, data.get("jobs"))
         return render(request, "node.html", {"project": project, "node": node, **data,
-                      "spec_html": render_markdown(node.get("spec_text") or ""), "active_page": "projects"})
+                      "spec_html": render_markdown(node.get("spec_text") or ""),
+                      "phase": node_phase_value,
+                      "phase_label": "Design" if node_phase_value == DESIGN else "Implementation",
+                      "active_page": "projects"})
 
     @app.get("/projects/{project_id}/logs", response_class=HTMLResponse)
     def logs_page(project_id: str, request: Request, job_id: str | None = None, store: Store = Depends(get_store)):
@@ -417,10 +431,29 @@ def create_app(
         project = project_summary(store, project_or_404(store, project_id))
         return {"project": project, "tree": project_tree(store, project_id), "runner": runner_status()}
 
+    @app.get("/api/projects/{project_id}/phase")
+    def api_phase(project_id: str, phase: str | None = None, store: Store = Depends(get_store)):
+        """Named workflow phase state for a project (design/implementation/mixed)."""
+        project = project_summary(store, project_or_404(store, project_id))
+        tree = project_tree(store, project_id)
+        if phase in (DESIGN, IMPLEMENTATION):
+            tree = filter_tree_to_phase(tree, phase, project.get("per_node"))
+        return {
+            "phase": project["phase"],
+            "design_count": project["design_count"],
+            "implementation_count": project["implementation_count"],
+            "selected_phase": phase if phase in (DESIGN, IMPLEMENTATION) else "all",
+            "per_node": project["per_node"],
+            "tree": tree,
+        }
+
     @app.get("/api/projects/{project_id}/nodes/{node_id}")
     def api_node(project_id: str, node_id: str, store: Store = Depends(get_store)):
         _, node = node_or_404(store, project_id, node_id)
-        return {"node": node, **node_page_data(store, project_id, node)}
+        data = node_page_data(store, project_id, node)
+        phase = node_phase(node, data.get("jobs"))
+        return {"node": node, **data, "phase": phase,
+                "phase_label": "Design" if phase == DESIGN else "Implementation"}
 
     @app.get("/api/projects/{project_id}/logs")
     def api_logs(project_id: str, job_id: str | None = None, limit: int = 100,

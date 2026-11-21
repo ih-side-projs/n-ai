@@ -16,6 +16,7 @@
     <article class="panel project-card">
       <div class="card-heading">
         <div><h2><a href="/projects/{{ p.id }}">{{ p.name }}</a></h2><span class="muted tiny">{{ p.id }}</span></div>
+        <span class="phase-badge phase-{{ p.phase }}">{{ p.phase|capitalize }}</span>
         <span class="status status-{{ p.status }}">{{ p.status }}</span>
       </div>
       <div class="progress-line" role="progressbar" aria-label="{{ p.name }} completion" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{ p.percent_done }}"><span style="width: {{ p.percent_done }}%"></span></div>

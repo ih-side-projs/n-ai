@@ -147,3 +147,21 @@ body {
 .empty-icon { font-size: 3rem; margin-bottom: 1rem; opacity: 0.5; }
 .empty-state h2 { margin: 0 0 0.5rem; font-size: 1.25rem; }
 .empty-state p { margin: 0; color: var(--text-muted); }
+
+/* Workflow phases (design / implementation) */
+.phase-badge { display: inline-flex; align-items: center; padding: 0.125rem 0.625rem; border-radius: 999px; font-size: 0.75rem; font-weight: 600; text-transform: capitalize; border: 1px solid; }
+.phase-design { color: #7c3aed; border-color: #7c3aed44; background: #7c3aed18; }
+.phase-implementation { color: #0891b2; border-color: #0891b244; background: #0891b218; }
+.phase-mixed { color: var(--warning); border-color: var(--warning); background: transparent; }
+@media (prefers-color-scheme: dark) {
+  .phase-design { color: #c4b5fd; }
+  .phase-implementation { color: #67e8f9; }
+}
+.phase-tabs { display: flex; gap: 0.5rem; margin: 1rem 0; border-bottom: 1px solid var(--border); }
+.phase-tab { display: inline-flex; align-items: center; gap: 0.5rem; padding: 0.5rem 1rem; text-decoration: none; color: var(--text-muted); border-bottom: 2px solid transparent; font-size: 0.875rem; }
+.phase-tab:hover { color: var(--text); }
+.phase-tab.active { color: var(--primary); border-bottom-color: var(--primary); font-weight: 600; }
+.phase-banner { padding: 0.75rem 1rem; border-radius: var(--radius); margin-bottom: 1rem; font-size: 0.875rem; border-left: 3px solid; }
+.phase-banner-design { border-color: #7c3aed; background: #7c3aed12; }
+.phase-banner-implementation { border-color: #0891b2; background: #0891b212; }
+.tree-summary .phase-badge { font-size: 0.6875rem; padding: 0.0625rem 0.375rem; }
