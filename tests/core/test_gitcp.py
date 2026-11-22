@@ -1,9 +1,8 @@
 """v1 git-checkpoint R1-R5, E1-E2, example; CORE-5 job-tagged checkpoints and restore."""
 import subprocess
 
-from tests.core.conftest import needs_git
-from nai import gitcp as gitmod
 from nai.gitcp import GitCheckpoint
+from tests.core.conftest import needs_git
 
 pytestmark = needs_git
 

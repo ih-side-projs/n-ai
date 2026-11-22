@@ -7,7 +7,7 @@
 
 {% if not service.running %}
 <section class="empty-state panel"><div class="empty-icon">⚠</div><h2>Service supervisor not running</h2>
-  <p>{{ service.error|default('Start it with <code>nai service start</code> from the CLI.')|safe }}</p>
+  <p>{{ service.error|default('Start it with "nai service start" from the CLI.') }}</p>
   <p class="tiny muted">The dashboard keeps working, but controls here need the supervisor's local socket.</p>
 </section>
 {% else %}
@@ -52,7 +52,7 @@
 
 <section class="panel">
   <h2>Stop supervisor</h2>
-  <form method="post" action="/service/control" class="inline-form" onsubmit="return confirm('Stop the supervisor and all children?')">
+  <form method="post" action="/service/control" class="inline-form confirm-form" data-confirm="Stop the supervisor and all children?">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <input type="hidden" name="action" value="stop">
     <button class="button danger">Stop service</button>

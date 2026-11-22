@@ -9,7 +9,7 @@ The suite uses scripted stub servers (`nai.testing.stub_server` and
 ```bash
 source .venv/bin/activate
 pytest -q
-# 485 passed, 1 skipped
+# All offline suites, including CLI and web end-to-end workflows
 ```
 
 ## Layout
@@ -22,7 +22,9 @@ pytest -q
 | `tests/spec/` | Checkers, schemas, structured-output fallbacks, scenario step fields |
 | `tests/build/` | Context packs, stubs, tenv, traceability, escalation, failure ladder |
 | `tests/tools/` | Registry, sandbox, data-files and project-introspection tools |
-| `tests/web/`, `tests/web2/` | Dashboard v1 and v2 (TestClient + httpx ASGITransport) |
+| `tests/web/` | Dashboard v1 and v2 (TestClient + httpx ASGITransport) |
+| `tests/e2e/` | Full CLI and web workflows against the real store, runner, command processor and stub LLM |
+| `tests/test_end_to_end.py` | In-process brief → spec → build → done pipeline |
 | `tests/test_eval.py` | Benchmark harness, stub server, reports |
 
 Each directory has its own `conftest.py` with fixtures and environment isolation,
@@ -32,6 +34,7 @@ so test order does not leak configuration between subsystems.
 
 ```bash
 pytest tests/spec/ -q                       # one subsystem
+pytest tests/e2e/ -q                        # CLI + web end-to-end workflows
 pytest -k 'CORE2 or STO3' -q                # by requirement id in test names
 pytest -x -q                                # stop at first failure
 pytest --tb=short -q                        # compact failures

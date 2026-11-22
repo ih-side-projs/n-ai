@@ -4,7 +4,6 @@ from __future__ import annotations
 import os
 import signal
 import subprocess
-import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -137,6 +136,6 @@ class ManagedProcess:
     def tail_log(self, lines: int = 100) -> str:
         if not self.log_path or not self.log_path.exists():
             return ""
-        with open(self.log_path, "r", encoding="utf-8", errors="replace") as fh:
+        with open(self.log_path, encoding="utf-8", errors="replace") as fh:
             content = fh.readlines()
         return "".join(content[-lines:])

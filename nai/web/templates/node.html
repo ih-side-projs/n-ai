@@ -28,11 +28,21 @@
   {% if node.status in ('draft', 'awaiting_approval') %}
     <form method="post" action="/projects/{{ project.id }}/nodes/{{ node.id }}/approve" class="inline-form">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <select name="stage" aria-label="Approval stage">
+        <option value="interfaces" {% if node.contract %}selected{% endif %}>interfaces</option>
+        <option value="component-spec" {% if not node.contract %}selected{% endif %}>component-spec</option>
+        <option value="component-map">component-map</option>
+      </select>
       <input type="text" name="note" placeholder="Approval note (optional)">
       <button type="submit" class="button success">Approve</button>
     </form>
     <form method="post" action="/projects/{{ project.id }}/nodes/{{ node.id }}/reject" class="inline-form">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <select name="stage" aria-label="Approval stage">
+        <option value="interfaces" {% if node.contract %}selected{% endif %}>interfaces</option>
+        <option value="component-spec" {% if not node.contract %}selected{% endif %}>component-spec</option>
+        <option value="component-map">component-map</option>
+      </select>
       <input type="text" name="note" placeholder="Rejection reason (required)" required>
       <button type="submit" class="button danger">Reject</button>
     </form>
@@ -49,7 +59,7 @@
       <select name="stage" required><option value="spec">Spec writing</option><option value="build">Build</option><option value="test">Test</option><option value="verify">Verify</option></select>
       <button type="submit" class="button secondary">Re-run stage</button>
     </form>
-    <form method="post" action="/projects/{{ project.id }}/nodes/{{ node.id }}/mark_stale" class="inline-form" onsubmit="return confirm('Mark this node as stale?')">
+    <form method="post" action="/projects/{{ project.id }}/nodes/{{ node.id }}/mark_stale" class="inline-form confirm-form" data-confirm="Mark this node as stale?">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <input type="text" name="note" placeholder="Reason (optional)">
       <button type="submit" class="button ghost">Mark stale</button>

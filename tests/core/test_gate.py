@@ -1,5 +1,4 @@
 """v1 verification-gate R1-R8, E1-E4, example; CORE-4 node scopes."""
-import os
 import time
 
 import pytest

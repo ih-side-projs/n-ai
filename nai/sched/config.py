@@ -29,7 +29,7 @@ class SchedConfig:
     threaded: bool = True                      # False runs jobs inline (tests, debugging); needs concurrency 1
 
     @classmethod
-    def from_table(cls, table: dict | None) -> "SchedConfig":
+    def from_table(cls, table: dict | None) -> SchedConfig:
         cfg = cls()
         known = {f.name for f in fields(cls)}
         for k, v in (table or {}).items():
@@ -41,7 +41,7 @@ class SchedConfig:
         return cfg
 
     @classmethod
-    def from_toml(cls, path: str | Path | None) -> "SchedConfig":
+    def from_toml(cls, path: str | Path | None) -> SchedConfig:
         if not path:
             return cls()
         from ..config import _toml_load

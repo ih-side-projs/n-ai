@@ -28,7 +28,7 @@ Open <http://127.0.0.1:8080>. OpenAPI docs are at `/api/docs`.
 | `/tools` | Registered tool catalog with schemas and working try-it forms (executes tools in a sandbox) |
 | `/service` | Supervisor status, child restart, nai job submission/cancel, logs |
 | `/projects/{id}/settings` | X9 limits, token budget, test commands, backup location, target language |
-| `/models` | Model profiles, `/v1/models` + `/running` status, smoke test |
+| `/models` | Model profiles (editable reasoner/coder ids), `/v1/models` + `/running` status, smoke test |
 | `/projects/{id}/logs` | Stored events and live SSE stream |
 | `/projects/{id}/metrics` | Tokens, wall time, success rate, retry stats, daily trend |
 | `/projects/{id}/artifacts` | Registered artifacts and safe workspace browser |
@@ -49,7 +49,8 @@ Saving recomputes project hashes and records a `node.spec_edited` event.
 ## Security (WEB-13 / WEB-14)
 
 - CSRF token issued as a cookie and required in form/header for all POSTs.
-- Same-origin check on state-changing requests.
+- Same-origin check uses a fixed host allowlist (loopback plus `NAI_WEB_ALLOWED_HOSTS`); `Host`/`X-Forwarded-Host` are never trusted.
+- Non-loopback binds require `NAI_WEB_TOKEN`.
 - Optional bearer token via `NAI_WEB_TOKEN` (header or cookie).
 - Strict Content-Security-Policy, `X-Frame-Options: DENY`, no external CDN assets.
 - Workspace file browser rejects absolute paths, `..`, hidden files and symlinks.

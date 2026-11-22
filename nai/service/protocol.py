@@ -6,7 +6,6 @@ import socket
 from pathlib import Path
 from typing import Any
 
-
 MAX_MESSAGE = 4 * 1024 * 1024  # logs and reports can be sizeable
 
 

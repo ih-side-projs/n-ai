@@ -1,12 +1,21 @@
 """Tests for SS-SPEC schemas (SPEC-5)."""
 from __future__ import annotations
+
 import json
+
 import pytest
+
 from nai.spec.schemas import (
-    get_schema, DECOMPOSE_SCHEMA, SELECT_MAP_SCHEMA, INTERFACES_SCHEMA,
-    CHECK_INTERFACES_SCHEMA, COMPONENT_SPEC_SCHEMA, RECONCILE_SCHEMA, CLARIFY_SCHEMA,
+    CHECK_INTERFACES_SCHEMA,
+    CLARIFY_SCHEMA,
+    COMPONENT_SPEC_SCHEMA,
+    DECOMPOSE_SCHEMA,
+    INTERFACES_SCHEMA,
+    RECONCILE_SCHEMA,
+    get_schema,
     write_schemas_to_disk,
 )
+
 
 def _validate(data: dict, schema: dict):
     try:
@@ -72,7 +81,6 @@ def test_clarify_schema_valid():
 
 def test_schemas_written_to_disk(tmp_path):
     import nai.spec.schemas as schemas_module
-    original_dir = schemas_module._SCHEMAS_DIR
     schemas_module._SCHEMAS_DIR = tmp_path / "schemas"
     write_schemas_to_disk()
     for name in ["decompose", "select_map", "interfaces", "check_interfaces", "component_spec", "reconcile", "clarify"]:

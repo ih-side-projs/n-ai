@@ -2,11 +2,11 @@
 
 ## systemd (Linux)
 
-`nai.service` is a template unit (uses `%i` for the user). Adjust paths if your
-checkout is not at `/home/<user>/Projects/nai`.
+`nai@.service` is a systemd template unit (uses `%i` for the user). Adjust paths
+if your checkout is not at `/home/<user>/Projects/nai`.
 
 ```bash
-sudo cp deploy/nai.service /etc/systemd/system/nai@.service
+sudo cp deploy/nai@.service /etc/systemd/system/nai@.service
 sudo systemctl daemon-reload
 sudo systemctl enable --now nai@$USER
 systemctl status nai@$USER

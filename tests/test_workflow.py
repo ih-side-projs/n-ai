@@ -4,7 +4,12 @@ from __future__ import annotations
 import pytest
 
 from nai.workflow import (
-    DESIGN, IMPLEMENTATION, filter_tree_to_phase, job_phase, node_phase, phase_summary,
+    DESIGN,
+    IMPLEMENTATION,
+    filter_tree_to_phase,
+    job_phase,
+    node_phase,
+    phase_summary,
 )
 
 

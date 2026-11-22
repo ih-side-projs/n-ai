@@ -12,7 +12,7 @@ import pytest
 
 from nai.service.cli import service_main
 from nai.service.config import ServiceConfig
-from nai.service.daemon import ServiceDaemon, daemon_main
+from nai.service.daemon import ServiceDaemon
 from nai.service.process import ManagedProcess
 from nai.service.protocol import request
 
@@ -105,7 +105,7 @@ class TestDaemon:
             daemon.dispatch("job", {"id": "missing"})
 
     def test_control_socket_round_trip(self, service_config):
-        daemon = ServiceDaemon(service_config)
+        ServiceDaemon(service_config)
         server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         server.bind(str(service_config.socket_path))
         server.listen(4)

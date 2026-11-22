@@ -4,9 +4,9 @@ from __future__ import annotations
 import sys
 import threading
 import time
+from collections.abc import Callable
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Callable
 
 COLORS = dict(dim="\033[2m", cyan="\033[36m", yellow="\033[33m", green="\033[32m", red="\033[31m", end="\033[0m")
 _TRANSCRIPT: Path | None = None

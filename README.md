@@ -126,6 +126,7 @@ Console scripts after installation:
 | `nai-bench --profile NAME` | run benchmark suites and write reports |
 | `nai service start\|status\|stop` | manage the background service (web + runner) |
 | `nai service exec SPEC.md` | submit a new `nai` instance to the service |
+| `nai doctor` / `nai --doctor` | offline integration self-check (imports, planners, handlers, schemas, assets) |
 | `python devswarm.py SPEC.md` | original v1 entry point |
 
 Detailed flags: [CLI reference](docs/cli-reference.md).

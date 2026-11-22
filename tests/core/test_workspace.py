@@ -2,9 +2,10 @@
 import subprocess
 
 import pytest
-from tests.core.conftest import needs_git
+
 from nai.policy import JobContext, PathPolicy
 from nai.workspace import Workspace
+from tests.core.conftest import needs_git
 
 
 @pytest.fixture

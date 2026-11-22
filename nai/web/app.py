@@ -10,9 +10,11 @@ import os
 import sqlite3
 import time
 from collections import Counter
+from collections.abc import Generator
 from dataclasses import dataclass
+from html import escape
 from pathlib import Path
-from typing import Any, Generator
+from typing import Any
 
 import bleach
 import mistune
@@ -23,11 +25,10 @@ from fastapi.templating import Jinja2Templates
 
 from nai.store import Store
 
+from ..workflow import DESIGN, IMPLEMENTATION, filter_tree_to_phase, node_phase, phase_summary
 from .metrics import _all_nodes, build_project_metrics
 from .models import ModelServerClient, ModelServerError
 from .security import new_csrf_token, verify_bearer_or_cookie, verify_same_origin, verify_token
-from ..workflow import DESIGN, IMPLEMENTATION, filter_tree_to_phase, job_phase, node_phase, phase_summary
-
 
 PACKAGE_DIR = Path(__file__).resolve().parent
 TEMPLATES_DIR = PACKAGE_DIR / "templates"
@@ -57,7 +58,7 @@ class WebSettings:
     max_view_bytes: int = 1_000_000
 
     @classmethod
-    def from_env(cls, database_path: str | Path | None = None) -> "WebSettings":
+    def from_env(cls, database_path: str | Path | None = None) -> WebSettings:
         db_path = Path(database_path or os.environ.get("NAI_DB_PATH", ".nai/nai.sqlite3")).expanduser().resolve()
         status = os.environ.get("NAI_RUNNER_STATUS_FILE")
         return cls(
@@ -362,10 +363,67 @@ def create_app(
 
     @app.get("/models", response_class=HTMLResponse)
     def models_page(request: Request, store: Store = Depends(get_store)):
+        from ..config import load_config
+
         profiles = _list_profiles(store)
+        stored_names = {p["name"] for p in profiles}
+        cfg = load_config()
+        # Include the built-in default profile so model ids are always editable,
+        # even before any profile has been saved to the store.
+        known = set(stored_names)
+        for name, profile in cfg.profiles.items():
+            if name not in known:
+                profiles.append({"name": name, "reasoner": profile.reasoner.to_dict(),
+                                 "coder": profile.coder.to_dict(),
+                                 "swap_cost_seconds": profile.swap_cost_seconds})
         snapshot = app.state.model_client.snapshot()
         return render(request, "models.html", {"profiles": profiles, "snapshot": snapshot,
-                      "active_page": "models", "smoke_result": None})
+                      "active_page": "models", "smoke_result": None, "message": None,
+                      "stored_names": stored_names})
+
+    @app.post("/models/profile")
+    async def models_save_profile(request: Request):
+        """Persist a model profile (default: built-in ids) from the dashboard."""
+        form = getattr(request.state, "parsed_form", None) or await request.form()
+        name = str(form.get("name") or "default").strip() or "default"
+        role = str(form.get("role") or "reasoner")
+        model_id = str(form.get("model_id") or "").strip()
+        if not model_id:
+            raise HTTPException(status_code=400, detail="model_id is required")
+        if role not in ("reasoner", "coder"):
+            raise HTTPException(status_code=400, detail="role must be reasoner or coder")
+
+        from ..config import load_config
+        from ..models import ModelProfile, default_profile
+
+        store = Store(settings.database_path, read_only=False)
+        try:
+            # Merge into the *stored* profile first, so editing one role does not
+            # reset the other role (or ctx/sampling) back to config defaults.
+            raw = store.get_model_profile(name)
+            cfg = load_config()
+            if raw:
+                profile = ModelProfile.from_dict(name, {
+                    "reasoner": raw.get("reasoner") or {},
+                    "coder": raw.get("coder") or {},
+                    "swap_cost_seconds": raw.get("swap_cost_seconds"),
+                })
+            elif name in cfg.profiles:
+                profile = cfg.profiles[name]
+            else:
+                profile = default_profile()
+            reasoner = profile.reasoner.to_dict()
+            coder = profile.coder.to_dict()
+            if role == "reasoner":
+                reasoner["model_id"] = model_id
+            else:
+                coder["model_id"] = model_id
+            sw = form.get("swap_cost_seconds")
+            swap_cost = float(sw) if sw not in (None, "") else profile.swap_cost_seconds
+            store.save_model_profile(name, reasoner, coder, swap_cost_seconds=swap_cost)
+        finally:
+            store.close()
+        return RedirectResponse(url="/models", status_code=303)
 
     @app.post("/models/smoke-test", response_class=HTMLResponse)
     def models_smoke_test(request: Request, store: Store = Depends(get_store)):
@@ -665,7 +723,7 @@ def create_app(
         return HTMLResponse(
             '<!doctype html><html><head><title>nai service log</title>'
             '<link rel="stylesheet" href="/static/app.css"></head><body><main class="container">'
-            f'<div class="page-heading"><h1>Log: {name}</h1><a class="button secondary" href="/service">Back</a></div>'
+            f'<div class="page-heading"><h1>Log: {escape(name)}</h1><a class="button secondary" href="/service">Back</a></div>'
             f'<pre class="code-block">{html.escape(text)}</pre></main></body></html>'
         )
 
@@ -678,15 +736,36 @@ def create_app(
             elif action == "restart":
                 data = _service_call("restart", name=target)
             elif action == "exec":
-                data = _service_call("exec", argv=argv.split(), name=target or None)
+                # WEB-13: browser must not control dangerous flags. Accept only
+                # a spec path and optional -w workspace; the supervisor builds argv.
+                import shlex
+
+                try:
+                    parts = shlex.split(argv)
+                except ValueError as exc:
+                    raise ValueError(f"invalid command: {exc}") from exc
+                if not parts or any(p.startswith("-") and p != "-w" for p in parts):
+                    raise ValueError("only a spec path and optional -w WORKSPACE are allowed")
+                safe_argv: list[str] = []
+                i = 0
+                while i < len(parts):
+                    if parts[i] == "-w":
+                        if i + 1 >= len(parts):
+                            raise ValueError("-w needs a workspace path")
+                        safe_argv += ["-w", parts[i + 1]]
+                        i += 2
+                    else:
+                        safe_argv.append(parts[i])
+                        i += 1
+                data = _service_call("exec", argv=safe_argv, name=target or None)
             elif action == "cancel":
                 data = _service_call("cancel", id=target)
             else:
                 raise ValueError(f"unknown action: {action}")
-            msg = f"Service action '{action}' completed: {data}"
+            msg = f"Service action '{escape(action)}' completed: {escape(str(data))}"
             level = "success"
         except Exception as exc:  # noqa: BLE001
-            msg = f"Service action failed: {exc}"
+            msg = f"Service action failed: {escape(str(exc))}"
             level = "error"
         return HTMLResponse(
             f'<div class="notice {level}" role="status">{msg} '
@@ -731,8 +810,7 @@ def create_app(
 
     @app.post("/tools/call")
     async def tools_call(request: Request, tool_name: str = Form(...), arguments: str = Form("{}"),
-                         workspace: str | None = Form(None),
-                         store: Store = Depends(get_store)):
+                         workspace: str | None = Form(None)):
         """Execute a registered tool through the same registry the MCP server uses.
 
         The tool runs in a sandbox rooted at the chosen workspace (default: the
@@ -745,11 +823,31 @@ def create_app(
         except (json.JSONDecodeError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=f"Invalid JSON arguments: {exc}") from exc
 
+        ws_root: Path | None = None
         try:
             from nai.tools.registry import get_registry
             from nai.tools.sandbox import Sandbox
 
-            ws_root = Path(workspace).expanduser().resolve() if workspace else settings.database_path.parent / "tools-workspace"
+            # Only allow sandbox roots that are registered project workspaces.
+            # Never trust an arbitrary browser-supplied path (TLS-5).
+            allowed_roots: set[Path] = set()
+            if settings.database_path.is_file():
+                # Open in this coroutine: a sync Store dependency would be created
+                # in a worker thread and cannot be used from the event loop.
+                with Store(settings.database_path, read_only=True) as store:
+                    for proj in store.list_projects():
+                        wp = (proj.get("workspace_path") or "").strip()
+                        if wp:
+                            allowed_roots.add(Path(wp).expanduser().resolve())
+            allowed_roots.add((settings.database_path.parent / "tools-workspace").resolve())
+
+            if workspace:
+                candidate = Path(workspace).expanduser().resolve()
+                if candidate not in allowed_roots:
+                    raise ValueError("workspace must be a registered project workspace")
+                ws_root = candidate
+            else:
+                ws_root = settings.database_path.parent / "tools-workspace"
             ws_root.mkdir(parents=True, exist_ok=True)
             sandbox = Sandbox(ws_root)
             registry = get_registry()
@@ -760,7 +858,17 @@ def create_app(
             is_error = True
         return JSONResponse({"tool": tool_name, "arguments": args,
                              "result": result, "isError": is_error,
-                             "workspace": str(ws_root)})
+                             "workspace": str(ws_root) if ws_root else None})
+
+    def _enqueue_command(pid: str, action: str, nid: str | None = None, payload: dict | None = None):
+        """All state changes go through the commands table (STO-3)."""
+        if not settings.database_path.is_file():
+            raise HTTPException(status_code=503, detail="N-AI database not found")
+        store = Store(settings.database_path, read_only=False)
+        try:
+            return store.enqueue_command(pid, action, node_id=nid, payload=payload or {})
+        finally:
+            store.close()
 
     def _writable_store() -> Store:
         if not settings.database_path.is_file():
@@ -807,53 +915,54 @@ def create_app(
             store.close()
         return RedirectResponse(url=f"/projects/{project_id}/nodes/{node_id}", status_code=303)
 
+    def _read_store() -> Store:
+        if not settings.database_path.is_file():
+            raise HTTPException(status_code=503, detail="N-AI database not found")
+        return Store(settings.database_path, read_only=True)
+
     @app.post("/projects/{project_id}/nodes/{node_id}/approve")
-    async def node_approve(project_id: str, node_id: str, request: Request, note: str = Form("")):
-        store = _writable_store()
+    async def node_approve(project_id: str, node_id: str, request: Request,
+                           note: str = Form(""), stage: str = Form("component-spec")):
+        # STO-3: web never writes approvals/status directly; enqueue a command.
+        if stage not in ("component-map", "interfaces", "component-spec", "escalation"):
+            raise HTTPException(status_code=400, detail="invalid approval stage")
+        store = _read_store()
         try:
             node = store.get_node(node_id)
             if not node or node.get("project_id") != project_id:
                 raise HTTPException(status_code=404, detail="Node not found")
-            if node["status"] not in ("draft", "awaiting_approval"):
-                raise HTTPException(status_code=400, detail=f"Cannot approve node in status '{node['status']}'")
-            store.add_approval(node_id, "component-spec", "approved", note=note)
-            store.transition_node_status(node_id, "approved", note=note)
-            store.record_event(project_id, "node.approved", f"Node {node_id} approved",
-                               node_id=node_id, level="info", data={"note": note, "action": "web_approve"})
         finally:
             store.close()
+        _enqueue_command(project_id, "approve", node_id,
+                         {"stage": stage, "note": note, "cascade": stage != "escalation"})
         return RedirectResponse(url=f"/projects/{project_id}/nodes/{node_id}", status_code=303)
 
     @app.post("/projects/{project_id}/nodes/{node_id}/reject")
-    async def node_reject(project_id: str, node_id: str, request: Request, note: str = Form(...)):
-        store = _writable_store()
+    async def node_reject(project_id: str, node_id: str, request: Request,
+                          note: str = Form(...), stage: str = Form("component-spec")):
+        if stage not in ("component-map", "interfaces", "component-spec", "escalation"):
+            raise HTTPException(status_code=400, detail="invalid approval stage")
+        store = _read_store()
         try:
             node = store.get_node(node_id)
             if not node or node.get("project_id") != project_id:
                 raise HTTPException(status_code=404, detail="Node not found")
-            store.add_approval(node_id, "component-spec", "rejected", note=note)
-            store.transition_node_status(node_id, "draft", note=note)
-            store.record_event(project_id, "node.rejected", f"Node {node_id} rejected",
-                               node_id=node_id, level="warning", data={"note": note, "action": "web_reject"})
         finally:
             store.close()
+        _enqueue_command(project_id, "reject", node_id, {"stage": stage, "note": note})
         return RedirectResponse(url=f"/projects/{project_id}/nodes/{node_id}", status_code=303)
 
     @app.post("/projects/{project_id}/nodes/{node_id}/retry")
     async def node_retry(project_id: str, node_id: str, request: Request):
-        store = _writable_store()
+        store = _read_store()
         try:
             node = store.get_node(node_id)
             if not node or node.get("project_id") != project_id:
                 raise HTTPException(status_code=404, detail="Node not found")
-            if node["status"] not in ("failed", "escalated"):
-                raise HTTPException(status_code=400, detail=f"Cannot retry node in status '{node['status']}'")
-            store.transition_node_status(node_id, "ready", note="Retry requested via web UI")
-            store.increment_node_attempts(node_id, 1)
-            store.record_event(project_id, "node.retry", f"Node {node_id} retry requested",
-                               node_id=node_id, level="info", data={"action": "web_retry"})
         finally:
             store.close()
+        # CommandProcessor._retry_node resets the budget and does not add an attempt.
+        _enqueue_command(project_id, "retry_node", node_id, {})
         return RedirectResponse(url=f"/projects/{project_id}/nodes/{node_id}", status_code=303)
 
     @app.post("/projects/{project_id}/nodes/{node_id}/rerun_stage")
@@ -919,7 +1028,7 @@ def create_app(
             if not isinstance(order, list):
                 raise ValueError
         except (json.JSONDecodeError, ValueError):
-            raise HTTPException(status_code=400, detail="node_order must be a JSON array")
+            raise HTTPException(status_code=400, detail="node_order must be a JSON array") from None
         store = _writable_store()
         try:
             store.enqueue_command(project_id, "reorder", payload={"order": order})

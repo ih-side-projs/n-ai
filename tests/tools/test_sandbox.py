@@ -83,7 +83,7 @@ class TestSandbox:
         sandbox = Sandbox(tmp_path, max_output_bytes=50)
         long_text = "x" * 100
         limited = sandbox.limit_output(long_text)
-        assert len(limited.encode()) <= 50 + len("... [output truncated".encode())
+        assert len(limited.encode()) <= 50 + len(b"... [output truncated")
         assert "truncated" in limited
     
     def test_run_with_timeout(self, tmp_path):

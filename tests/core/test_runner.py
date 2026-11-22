@@ -88,7 +88,10 @@ def test_R5_R6_docker_commands_and_cleanup(tmp_path, fake_docker):
     calls = [json.loads(line) for line in fake_docker.read_text().splitlines()]
     run = calls[0]
     assert run[:6] == ["run", "-d", "--rm", "--init", "--name", r.container]
-    assert run[6:10] == ["-v", f"{tmp_path}:/work", "-w", "/work"] and run[10:] == ["python:3.12", "sleep", "infinity"]
+    # Hardened docker flags: no network, memory/cpu caps, non-root user
+    assert "--network" in run and "none" in run
+    assert "--memory" in run and "--cpus" in run and "--user" in run
+    assert f"{tmp_path}:/work" in run and "/work" in run and run[-2:] == ["sleep", "infinity"]
     assert r.run_command("echo $CI-$X") == "exit code: 0\n1-1\n"
     ex = [json.loads(line) for line in fake_docker.read_text().splitlines()][-1]
     assert ex[:3] == ["exec", "-w", "/work"] and "CI=1" in ex and "X=1" in ex
@@ -110,4 +113,5 @@ def test_E3_docker_run_failure_raises(tmp_path, monkeypatch):
 def test_docker_names_unique_per_runner(tmp_path, fake_docker):
     a, b = mk(tmp_path, docker_image="x"), mk(tmp_path, docker_image="x")
     assert a.container != b.container
-    a.close(); b.close()
+    a.close()
+    b.close()

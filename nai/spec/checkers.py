@@ -1,10 +1,11 @@
 """Mechanical interface checks (SPEC-3) and spec lint (SPEC-4)."""
 from __future__ import annotations
+
 import re
-from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
 
 @dataclass(frozen=True)
 class Finding:

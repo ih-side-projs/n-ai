@@ -1,5 +1,17 @@
 # Troubleshooting
 
+## Subsystems pass tests but the integrated system does not
+
+Run the offline integration self-check first:
+
+```bash
+nai doctor
+```
+
+It reports failed imports, missing CLI subcommands, planner/handler API drift,
+invalid artifact kinds, stale schema artifacts, missing packaged data, store
+migration failures and tool-registry gaps. Use `nai doctor --json` for CI logs.
+
 ## `ModuleNotFoundError` for `fastapi`, `jsonschema`, etc.
 
 Install all extras used in development:

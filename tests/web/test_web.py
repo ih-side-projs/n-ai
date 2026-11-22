@@ -1,13 +1,12 @@
 import json
-import re
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
 from nai.store import Store
-from nai.web.app import create_app, render_markdown, _list_project_files, _safe_workspace_path
-from nai.web.models import ModelServerClient, ModelServerError, _extract_running_models
+from nai.web.app import _list_project_files, _safe_workspace_path, create_app, render_markdown
+from nai.web.models import ModelServerClient, _extract_running_models
 
 
 @pytest.fixture
@@ -184,8 +183,8 @@ def test_missing_database_returns_actionable_503(tmp_path):
 
 
 def test_model_page_uses_local_server_models_running_and_smoke_test(web_db):
-    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
     import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
     class Handler(BaseHTTPRequestHandler):
         def _send(self, payload, content_type="application/json"):
@@ -258,8 +257,8 @@ def test_runner_status_file_is_exposed_in_json(web_db, tmp_path):
 
 def test_sse_backlog_emits_project_events(web_db):
     import asyncio
-    from nai.web.app import _event_stream
-    from nai.web.app import WebSettings
+
+    from nai.web.app import WebSettings, _event_stream
 
     db, project_id, root_id, job_id, workspace = web_db
 

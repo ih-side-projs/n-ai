@@ -9,11 +9,12 @@ import json
 import re
 import time
 import urllib.request
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace as NS
-from typing import Any, Callable
+from typing import Any
 
 from .terminal import Streamer, log
 
@@ -84,7 +85,8 @@ class JsonlCallLog:
 
 class LLM:
     def __init__(self, base_url: str, api_key: str, timeout: float = 3600, stream: bool = True,
-                 show_thinking: bool = True, swap_threshold: float = 10.0, probe_running: bool = True):
+                 show_thinking: bool = True, swap_threshold: float = 10.0, probe_running: bool = True,
+                 prefill_tokens_per_second: float = 2000.0):
         try:
             from openai import OpenAI
         except ImportError as e:
@@ -97,6 +99,7 @@ class LLM:
         self.show_thinking = show_thinking
         self.swap_threshold = swap_threshold      # seconds to first token above which a call counts as a swap
         self.probe_running = probe_running
+        self.prefill_tokens_per_second = max(1.0, prefill_tokens_per_second)
         self.observers: list[Callable[[CallRecord], None]] = []
         self._probe_retry_at = 0.0
 
@@ -118,7 +121,8 @@ class LLM:
 
     # -- the call --------------------------------------------------------------
     def chat(self, model, messages, sampling, tools=None, max_tokens=None, tag="llm",
-             response_format: dict | None = None, grammar: str | None = None, meta: dict | None = None) -> ChatResult:
+             response_format: dict | None = None, grammar: str | None = None, meta: dict | None = None,
+             cancel_event=None) -> ChatResult:
         s = dict(sampling)
         kw: dict[str, Any] = dict(model=model, messages=messages, temperature=s.pop("temperature"), top_p=s.pop("top_p"))
         if tools:
@@ -136,7 +140,7 @@ class LLM:
         ttft: float | None = None
         try:
             if self.stream:
-                msg, usage, finish, ttft = self._stream(kw, tag, t0)
+                msg, usage, finish, ttft = self._stream(kw, tag, t0, cancel_event=cancel_event)
             else:
                 r = self.client.chat.completions.create(**kw)
                 msg, usage, finish = r.choices[0].message, r.usage, r.choices[0].finish_reason
@@ -156,9 +160,14 @@ class LLM:
         else:  # server did not report usage: rough estimate
             u = Usage(int(len(json.dumps(messages, ensure_ascii=False)) / 3.5), ct, True)
         if before is not None:
+            # Authoritative: llama-swap's /running endpoint
             swapped, method = model not in before, "running"
-        elif ttft is not None:
-            swapped, method = ttft > self.swap_threshold, "latency"
+        elif ttft is not None and pt:
+            # Latency fallback: subtract estimated prompt prefill so a long
+            # prompt is not mistaken for a model swap (Pass 4).
+            estimated_prefill = int(pt) / self.prefill_tokens_per_second
+            swapped = (ttft - estimated_prefill) > self.swap_threshold
+            method = "latency-adjusted"
         else:
             swapped, method = False, "none"
         res = ChatResult(msg, u, dt, swapped, method, ttft, finish)
@@ -184,7 +193,7 @@ class LLM:
             except Exception as e:   # an observer must never break a model call
                 log("llm", f"call observer failed: {type(e).__name__}: {e}", "yellow")
 
-    def _stream(self, kw, tag, t0):
+    def _stream(self, kw, tag, t0, cancel_event=None):
         out = Streamer(tag, self.show_thinking)
         content: list[str] = []
         reasoning: list[str] = []
@@ -193,6 +202,9 @@ class LLM:
         stream = self.client.chat.completions.create(**kw, stream=True, stream_options={"include_usage": True})
         try:
             for chunk in stream:
+                if cancel_event is not None and cancel_event.is_set():
+                    stream.close()
+                    raise InterruptedError("model generation cancelled")
                 if getattr(chunk, "usage", None):
                     usage = chunk.usage
                 if not chunk.choices:

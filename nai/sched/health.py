@@ -58,7 +58,7 @@ class RunnerLock:
             fh.seek(0)
             holder = fh.read().strip() or "unknown pid"
             fh.close()
-            raise RunnerAlreadyRunning(f"another runner holds {self.path} (pid {holder})")
+            raise RunnerAlreadyRunning(f"another runner holds {self.path} (pid {holder})") from None
         fh.seek(0)
         fh.truncate()
         fh.write(str(os.getpid()))

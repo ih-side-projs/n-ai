@@ -1,14 +1,23 @@
 """SS-SPEC job handlers executed by the WP3 scheduler (SPEC-1..9)."""
 from __future__ import annotations
+
 import json
 import re
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .checkers import check_interfaces, Finding, lint_spec, lint_spec_file
-from .prompts import get_prompt, DECOMPOSE, SELECT_MAP, INTERFACES, CHECK_INTERFACES, COMPONENT_SPEC, RECONCILE, CLARIFY
-from .schemas import DECOMPOSE_SCHEMA, SELECT_MAP_SCHEMA, INTERFACES_SCHEMA, CHECK_INTERFACES_SCHEMA, COMPONENT_SPEC_SCHEMA, RECONCILE_SCHEMA, CLARIFY_SCHEMA
+from .checkers import check_interfaces, lint_spec
+from .prompts import CHECK_INTERFACES, CLARIFY, COMPONENT_SPEC, DECOMPOSE, INTERFACES, RECONCILE, SELECT_MAP, get_prompt
+from .schemas import (
+    CHECK_INTERFACES_SCHEMA,
+    CLARIFY_SCHEMA,
+    COMPONENT_SPEC_SCHEMA,
+    DECOMPOSE_SCHEMA,
+    INTERFACES_SCHEMA,
+    RECONCILE_SCHEMA,
+    SELECT_MAP_SCHEMA,
+)
+
 
 def _make_job_result(ok: bool, **kwargs: Any) -> Any:
     try:
@@ -58,13 +67,13 @@ def _get_siblings(ctx: Any, node: dict[str, Any]) -> list[dict[str, Any]]:
     return ctx.store.list_nodes(ctx.project["id"], parent_id=pid) or []
 
 def _call_structured(ctx: Any, prompt_name: str, payload: dict[str, Any], schema: dict[str, Any], tag: str, meta: dict[str, Any] | None = None, max_repairs: int = 3) -> dict[str, Any]:
-    from .structured import call_structured_json, StructuredOutputError
+    from .structured import StructuredOutputError, call_structured_json
     prompt = get_prompt(prompt_name)
     messages = [{"role": "system", "content": prompt.text}, {"role": "user", "content": json.dumps(payload, indent=2)}]
     try:
         return call_structured_json(ctx.client, "reasoner", messages, schema, tag=tag, meta={"job_id": ctx.job["id"], "prompts": [prompt.id], **(meta or {})}, max_repairs=max_repairs)
     except StructuredOutputError as exc:
-        raise RuntimeError(f"Structured output failed after {max_repairs} repairs: {exc}")
+        raise RuntimeError(f"Structured output failed after {max_repairs} repairs: {exc}") from exc
 
 def _size_limits(ctx: Any) -> dict[str, Any]:
     """X9 size limits: project settings > NAI config > spec defaults.
@@ -89,6 +98,19 @@ def _size_limits(ctx: Any) -> dict[str, Any]:
     return {**defaults, **overrides}
 
 
+MAX_REPAIR_ROUNDS = 3
+
+def _round(ctx: Any) -> int:
+    return int((ctx.job.get("input_ref") or {}).get("round", 0))
+
+
+def _requeue(ctx: Any, kind: str, rounds: int, **kwargs: Any) -> Any:
+    if rounds >= MAX_REPAIR_ROUNDS:
+        return _make_job_result(False, error=f"repair round limit ({MAX_REPAIR_ROUNDS}) exceeded", **kwargs)
+    ctx.enqueue(kind, "reasoner", input_ref={"round": rounds + 1})
+    return _make_job_result(True, requeued=True, **kwargs)
+
+
 # ---------------------------------------------------------------------------
 # Stage 1: Decompose
 # ---------------------------------------------------------------------------
@@ -96,7 +118,7 @@ def _size_limits(ctx: Any) -> dict[str, Any]:
 def handle_decompose(ctx: Any) -> Any:
     ctx.check()
     node, project = ctx.node, ctx.project
-    ws_root = _workspace_root(ctx)
+    _workspace_root(ctx)
     brief = node.get("spec_text") or project.get("brief") or ""
     target_stack = project.get("settings", {}).get("target_env", {}).get("language", "Python 3.12")
     limits = _size_limits(ctx)
@@ -115,7 +137,18 @@ def handle_decompose(ctx: Any) -> Any:
         return _make_job_result(False, error=str(e))
     cm = {"components": result["components"], "shared_entities": result["shared_entities"], "external_inputs": result["external_inputs"], "external_outputs": result["external_outputs"]}
     ctx.store.update_node_contract(node["id"], cm)
-    ctx.artifact("component_map", json.dumps(cm, indent=2), f"component_map_{node['name']}.json")
+    # Create a child node for each component so the spec tree is recursable (stage 11).
+    existing = {c["name"] for c in ctx.store.list_nodes(project["id"], parent_id=node["id"])}
+    for child in cm["components"]:
+        name = str(child.get("name") or "").strip()
+        if not name or name in existing:
+            continue
+        ctx.store.create_node(
+            project["id"], name, "component", parent_id=node["id"],
+            objective=str(child.get("objective") or ""),
+            depends_on=list(child.get("depends_on") or []),
+        )
+    ctx.artifact("report", json.dumps(cm, indent=2), f"component_map_{node['name']}.json")
     ctx.event("spec.decompose_done", f"Generated component map with {len(cm['components'])} components", level="info", data={"component_count": len(cm["components"])})
     return _make_job_result(True, component_map=cm, prompt_id=get_prompt(DECOMPOSE).id)
 
@@ -138,8 +171,8 @@ def handle_select_map(ctx: Any) -> Any:
         return _make_job_result(False, error=str(e))
     selected = result["merged_map"]
     ctx.store.update_node_contract(node["id"], selected)
-    ctx.artifact("selected_map", json.dumps(selected, indent=2), f"selected_map_{node['name']}.json")
-    ctx.event("spec.select_map_done", f"Selected/merged component map", level="info", data={"selected_index": result["selected_index"]})
+    ctx.artifact("report", json.dumps(selected, indent=2), f"selected_map_{node['name']}.json")
+    ctx.event("spec.select_map_done", "Selected/merged component map", level="info", data={"selected_index": result["selected_index"]})
     return _make_job_result(True, selected_map=selected, prompt_id=get_prompt(SELECT_MAP).id)
 
 
@@ -181,15 +214,21 @@ def handle_check_interfaces(ctx: Any) -> Any:
         gaps = []
         for f in code_findings:
             match = re.search(r"Scenario (\w+) step (\d+)", f.message)
-            if match:
-                gaps.append({"scenario_id": match.group(1), "step_index": int(match.group(2)), "issue": f.code.replace("SPEC3_", "").lower(), "missing_element": f.message.split("'")[1] if "'" in f.message else "unknown", "suggested_fix": f"Fix {f.code}: {f.message}"})
+            gaps.append({
+                "scenario_id": match.group(1) if match else "",
+                "step_index": int(match.group(2)) if match else 0,
+                "issue": f.code.replace("SPEC3_", "").lower(),
+                "missing_element": f.message.split("'")[1] if "'" in f.message else f.message,
+                "suggested_fix": f"Fix {f.code}: {f.message}",
+                "severity": f.severity,
+            })
         if gaps:
             payload = {"contract": contract, "gaps": gaps}
             try:
                 result = _call_structured(ctx, CHECK_INTERFACES, payload, CHECK_INTERFACES_SCHEMA, "check_interfaces")
                 if not result.get("all_verified"):
                     ctx.event("spec.check_interfaces_gaps", f"Found {len(gaps)} gaps in contract", level="warning", data={"gaps": gaps})
-                    return _make_job_result(True, requeue=True, gaps=gaps, prompt_id=get_prompt(CHECK_INTERFACES).id)
+                    return _requeue(ctx, "check_interfaces", _round(ctx), gaps=gaps, prompt_id=get_prompt(CHECK_INTERFACES).id)
             except RuntimeError as e:
                 return _make_job_result(False, error=str(e))
     ctx.event("spec.check_interfaces_passed", "All interface checks passed", level="info")
@@ -222,9 +261,11 @@ def handle_component_spec(ctx: Any) -> Any:
         return _make_job_result(False, error=str(e))
     spec_markdown = result["spec_markdown"]
     _write_spec_file(ws_root, node, spec_markdown)
+    # Persist to the store so lint/planning and downstream traceability can read it.
+    ctx.store.update_node_spec(node["id"], spec_markdown)
     requirements = [{"id": r["id"], "text": r["text"], "testable": r.get("testable", True)} for r in result["requirements"]]
     ctx.store.replace_requirements(node["id"], requirements)
-    ctx.artifact("component_spec", spec_markdown, f"SPEC-{node['name']}.md")
+    ctx.artifact("spec", spec_markdown, f"SPEC-{node['name']}.md")
     ctx.event("spec.component_spec_done", f"Generated spec for {node['name']} with {len(requirements)} requirements", level="info", data={"requirement_count": len(requirements)})
     return _make_job_result(True, spec=spec_markdown, requirements=requirements, prompt_id=get_prompt(COMPONENT_SPEC).id)
 
@@ -245,7 +286,7 @@ def handle_lint(ctx: Any) -> Any:
     if findings:
         error_count = sum(1 for f in findings if f.severity == "error")
         ctx.event("spec.lint_failed", f"Lint found {error_count} errors, {len(findings) - error_count} warnings", level="warning" if error_count else "info", data={"findings": [str(f) for f in findings]})
-        return _make_job_result(True, requeue=True, findings=[str(f) for f in findings])
+        return _requeue(ctx, "lint", _round(ctx), findings=[str(f) for f in findings])
     ctx.event("spec.lint_passed", "Spec lint passed", level="info")
     return _make_job_result(True, findings=[])
 
@@ -256,7 +297,7 @@ def handle_lint(ctx: Any) -> Any:
 
 def handle_reconcile(ctx: Any) -> Any:
     ctx.check()
-    node, project = ctx.node, ctx.project
+    node, _project = ctx.node, ctx.project
     siblings = _get_siblings(ctx, node)
     if len(siblings) <= 1:
         return _make_job_result(True, skipped=True, reason="no_siblings")
@@ -279,7 +320,7 @@ def handle_reconcile(ctx: Any) -> Any:
     error_findings = [f for f in findings if f.get("severity") == "error"]
     if error_findings:
         ctx.event("spec.reconcile_errors", f"Reconcile found {len(error_findings)} errors", level="error", data={"findings": findings})
-        return _make_job_result(True, requeue=True, findings=findings)
+        return _requeue(ctx, "reconcile", _round(ctx), findings=findings)
     ctx.event("spec.reconcile_passed", "Sibling reconciliation passed", level="info", data={"findings": findings})
     return _make_job_result(True, findings=findings, prompt_id=get_prompt(RECONCILE).id)
 
@@ -299,5 +340,11 @@ def handle_clarify(ctx: Any) -> Any:
     except RuntimeError as e:
         return _make_job_result(False, error=str(e))
     questions = result.get("questions", [])
+    # Persist assumptions so the planner does not re-queue clarify forever.
+    settings = dict(project.get("settings") or {})
+    settings["clarified"] = True
+    settings["clarify_questions"] = questions
+    settings["assumptions"] = [q.get("default_answer") for q in questions if q.get("default_answer")]
+    ctx.store.update_project(project["id"], settings=settings)
     ctx.event("spec.clarify_done", f"Generated {len(questions)} clarification questions", level="info", data={"questions": questions})
     return _make_job_result(True, questions=questions, prompt_id=get_prompt(CLARIFY).id)

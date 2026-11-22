@@ -34,10 +34,49 @@ jobs:
       - name: Syntax check
         run: python -m compileall -q nai
 
+      - name: Lint (ruff)
+        run: |
+          python -m pip install ruff
+          ruff check nai tests
+
       - name: Test suite
         run: pytest -q
+
+      - name: End-to-end integration (stub LLM)
+        run: pytest -q tests/test_end_to_end.py tests/e2e/ --tb=short
 
       - name: Verify schema artifacts are in sync
         run: |
           python -m nai.spec.schemas
           git diff --exit-code nai/spec/schemas/
+
+  wheel:
+    name: Wheel smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Build wheel
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build --wheel
+      - name: Install into clean venv and smoke test
+        run: |
+          python -m venv /tmp/nai-wheel-venv
+          /tmp/nai-wheel-venv/bin/pip install dist/*.whl
+          /tmp/nai-wheel-venv/bin/python - <<'PY'
+          from pathlib import Path
+          import nai, nai.store, nai.spec, nai.build, nai.web, nai.eval
+          root = Path(nai.__file__).parent
+          assert list((root / 'store' / 'migrations').glob('*.sql'))
+          assert list((root / 'spec' / 'schemas').glob('*.json'))
+          assert list((root / 'build' / 'prompts').glob('*.txt'))
+          assert (root / 'web' / 'templates' / 'base.html').exists()
+          from nai.store import Store
+          import tempfile
+          with tempfile.TemporaryDirectory() as d:
+              s = Store(Path(d) / 't.sqlite3'); s.close()
+          print('wheel smoke test OK')
+          PY

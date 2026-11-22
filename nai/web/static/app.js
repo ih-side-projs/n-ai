@@ -75,10 +75,16 @@ document.addEventListener('DOMContentLoaded', () => {
       try {
         const response = await fetch('/tools/call', { method: 'POST', body: formData });
         const data = await response.json();
-        resultDiv.innerHTML = `<pre class="code-block">${escapeHtml(JSON.stringify(data, null, 2))}</pre>`;
+        const pre = document.createElement('pre');
+        pre.className = 'code-block';
+        pre.textContent = JSON.stringify(data, null, 2);
+        resultDiv.replaceChildren(pre);
         resultDiv.className = 'tool-result ' + (data.isError ? 'error' : 'success');
       } catch (err) {
-        resultDiv.innerHTML = `<pre class="code-block error-output">Error: ${err.message}</pre>`;
+        const pre = document.createElement('pre');
+        pre.className = 'code-block error-output';
+        pre.textContent = 'Error: ' + err.message;
+        resultDiv.replaceChildren(pre);
         resultDiv.className = 'tool-result error';
       } finally {
         btn.disabled = false;
@@ -93,12 +99,51 @@ document.addEventListener('DOMContentLoaded', () => {
     return div.innerHTML;
   }
 
-  // Confirmation for destructive actions
-  document.querySelectorAll('form[onsubmit]').forEach(form => {
-    const originalSubmit = form.onsubmit;
+  // Confirmation-only forms still submit normally; the inline onsubmit form is
+  // blocked by the CSP, so keep confirmation in this external script.
+  document.querySelectorAll('form.confirm-form').forEach(form => {
     form.addEventListener('submit', (e) => {
-      if (originalSubmit && !originalSubmit.call(form, e)) {
+      if (form.dataset.confirm && !window.confirm(form.dataset.confirm)) {
         e.preventDefault();
+      }
+    });
+  });
+
+  // Project control forms return JSON. Submit them via fetch and reload the page
+  // instead of letting the browser navigate to a bare JSON document.
+  document.querySelectorAll('form.control-form').forEach(form => {
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      if (form.dataset.confirm && !window.confirm(form.dataset.confirm)) {
+        return;
+      }
+      const button = form.querySelector('button[type="submit"]');
+      const originalText = button ? button.textContent : '';
+      if (button) {
+        button.disabled = true;
+        button.textContent = 'Working...';
+      }
+      try {
+        const response = await fetch(form.action, {
+          method: 'POST',
+          body: new FormData(form),
+          headers: { 'Accept': 'application/json', 'X-Requested-With': 'fetch' }
+        });
+        if (!response.ok) {
+          let detail = response.statusText;
+          try {
+            const data = await response.json();
+            detail = data.detail || detail;
+          } catch (_) { /* non-JSON error */ }
+          throw new Error(detail);
+        }
+        window.location.reload();
+      } catch (err) {
+        window.alert('Command failed: ' + err.message);
+        if (button) {
+          button.disabled = false;
+          button.textContent = originalText;
+        }
       }
     });
   });

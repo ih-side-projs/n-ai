@@ -19,7 +19,7 @@ from pathlib import Path
 from .. import terminal
 from ..config import Config, ConfigError
 from ..models import ModelClient, ModelProfile, default_profile
-from .budget import Budget, Usage, UsageTracker, budget_for
+from .budget import Usage, UsageTracker, budget_for
 from .commands import CommandProcessor
 from .config import SchedConfig
 from .context import RunContext
@@ -28,7 +28,7 @@ from .pick import Batcher, Cand
 from .readiness import depth_map, promote_ready, walk_nodes
 from .registry import BudgetExceeded, HandlerRegistry, JobCancelled, JobResult
 from .store_api import StoreActor, StoreProxy, serve
-from .util import SystemClock, as_obj, is_invalid_transition, is_transient, iso
+from .util import SystemClock, as_obj, is_transient, iso
 
 INACTIVE = ("paused", "done", "archived")
 LOG_LEVEL = {"red": "error", "yellow": "warning"}
@@ -53,7 +53,7 @@ class PlanContext:
     project: dict
     nodes: list[dict]
     jobs: list[dict]                    # queued and running jobs of the project
-    runner: "Runner"
+    runner: Runner
     now: object = None
     nodes_by_id: dict = field(default_factory=dict)
 
@@ -275,6 +275,9 @@ class Runner:
             except ValueError:
                 pass
             self._observer_added = False
+        # Drain inbox BEFORE joining workers: a handler waiting on the store
+        # needs the main thread to service its proxy calls.
+        self._drain_inbox(0)
         if self._pool:
             self._pool.shutdown(wait=True)
             self._pool = None
@@ -287,25 +290,30 @@ class Runner:
         self._write_health("stopped")
 
     def step(self, wait: float = 0.0) -> bool:
-        """One loop iteration. Returns True if anything happened (a message handled, a command run, a job started)."""
+        """One loop iteration. Returns True if anything happened. Never lets one bad pass kill the runner."""
         self.start()
         self.actor.bind_current_thread()
         self.stats["steps"] += 1
-        did = self._drain_inbox(wait)
-        did |= self._process_commands()
-        projects = self.store.list_projects()
-        self._projects = {p["id"]: p for p in projects}
-        active = [p for p in projects if self._is_active(p)]
-        for p in active:
-            self._ensure_usage(p["id"])
-        mono = self.clock.mono()
-        if self._dirty or mono >= self._next_plan:
-            self._plan_pass(active)
-        cands = self._candidates(active)
-        started = self._maybe_start(cands)
-        self._idle = not self.running and self._queued_total == 0
-        self._heartbeat()
-        return bool(did or started)
+        try:
+            did = self._drain_inbox(wait)
+            did |= self._process_commands()
+            projects = self.store.list_projects()
+            self._projects = {p["id"]: p for p in projects}
+            active = [p for p in projects if self._is_active(p)]
+            for p in active:
+                self._ensure_usage(p["id"])
+            mono = self.clock.mono()
+            if self._dirty or mono >= self._next_plan:
+                self._plan_pass(active)
+            cands = self._candidates(active)
+            started = self._maybe_start(cands)
+            self._idle = not self.running and self._queued_total == 0
+            self._heartbeat()
+            return bool(did or started)
+        except Exception as exc:
+            for pid in list(self._projects):
+                self._event(pid, "runner.step_error", f"runner step failed: {type(exc).__name__}: {exc}", level="error")
+            return False
 
     # ================================================================ planning and readiness
     def _is_active(self, p: dict) -> bool:
@@ -419,8 +427,15 @@ class Runner:
                 self._end_unstarted(job, f"budget exceeded: {why}", node, budget_data={"usage": asdict(u), "budget": asdict(budget)})
                 return False
             if job["kind"] in self.sched.attempt_job_kinds:
-                self.store.increment_node_attempts(nid)
-                node["attempts"] = int(node.get("attempts") or 0) + 1
+                # A requeued job was already counted on its first start; do not
+                # burn another attempt for a transient error or shutdown.
+                input_ref = as_obj(job.get("input_ref"), {}) or {}
+                if not input_ref.get("requeued"):
+                    self.store.increment_node_attempts(nid)
+                    node["attempts"] = int(node.get("attempts") or 0) + 1
+                else:
+                    input_ref.pop("requeued", None)
+                    self.store.update_job(job["id"], input_ref=input_ref)
         self.store.update_job(job["id"], status="running", started_at=iso(self.clock.now()))
         ctx = RunContext(self, job, node, project, self.profile_for(project), budget)
         run = JobRun(job, ctx, c.key, pid, nid, self.clock.mono())
@@ -462,7 +477,13 @@ class Runner:
     def _fail_node(self, node: dict, reason: str) -> bool:
         """SCH-5: move a node to `failed` along legal edges (running/verifying -> failed; ready -> running -> failed)."""
         fresh = self.store.get_node(node["id"]) or node
-        path = {"running": ["failed"], "verifying": ["failed"], "ready": ["running", "failed"]}.get(fresh["status"])
+        # Amended SCH-5: budgets first mark the node `blocked`, then the
+        # failure ladder moves it to `failed`.
+        path = {
+            "running": ["blocked", "failed"],
+            "verifying": ["blocked", "failed"],
+            "ready": ["blocked", "failed"],
+        }.get(fresh["status"])
         if not path:
             self._event(fresh["project_id"], "budget.node_not_failed",
                         f"budget used up but node is {fresh['status']}, which cannot move to failed: {reason}",
@@ -593,7 +614,10 @@ class Runner:
             self.tracker.add(nid, ctx.tokens, seconds)
         now = iso(self.clock.now())
         if requeue:
-            self.store.update_job(job_id, status="queued", started_at=None)
+            # Mark the job so a restart does not count another attempt.
+            requeue_ref = as_obj(job.get("input_ref"), {}) or {}
+            requeue_ref["requeued"] = True
+            self.store.update_job(job_id, status="queued", started_at=None, input_ref=requeue_ref)
             self.stats["jobs_requeued"] += 1
             self._event(pid, "job.requeued", f"{job['kind']} put back in the queue" + (f": {error}" if error else ""),
                         node_id=nid, job_id=job_id, level="warning")
@@ -644,7 +668,10 @@ class Runner:
                 continue
             pid = p["id"]
             for j in self.store.list_jobs(pid, status="running", limit=5000):
-                self.store.update_job(j["id"], status="queued", started_at=None)
+                # Mark as requeued so the next start does not burn another attempt.
+                ref = as_obj(j.get("input_ref"), {}) or {}
+                ref["requeued"] = True
+                self.store.update_job(j["id"], status="queued", started_at=None, input_ref=ref)
                 report["requeued_jobs"] += 1
                 self._event(pid, "runner.recovered_job", f"{j['kind']} was running when the runner stopped; queued again",
                             node_id=j.get("node_id"), job_id=j["id"], level="warning")
@@ -652,8 +679,25 @@ class Runner:
             for n in walk_nodes(self.store, pid):
                 if n["status"] in ("running", "verifying") and n["id"] not in active:
                     report["orphan_nodes"] += 1
-                    self._event(pid, "runner.orphan_node", f"node {n.get('name', n['id'])} is {n['status']} but has no job",
-                                node_id=n["id"], level="warning")
+                    # Repair: a node with no active job cannot make progress.
+                    # Move it back to `ready` so the planner can re-evaluate it.
+                    try:
+                        # STO-4: running/verifying cannot go straight to ready;
+                        # route through stale (which is allowed from every state).
+                        self.store.transition_node_status(
+                            n["id"], "stale", note="orphan recovery: no active job after restart",
+                        )
+                        self.store.transition_node_status(
+                            n["id"], "ready", note="orphan recovery: re-evaluate",
+                        )
+                        repaired = True
+                    except Exception:
+                        repaired = False
+                    self._event(pid, "runner.orphan_node",
+                                f"node {n.get('name', n['id'])} was {n['status']} with no job; "
+                                f"{'reset to ready' if repaired else 'could not repair'}",
+                                node_id=n["id"], level="warning",
+                                data={"repaired": repaired, "previous_status": n["status"]})
             self._event(pid, "runner.started", "runner started", data=dict(report))
         self.mark_dirty()
         return report
@@ -721,7 +765,7 @@ class Runner:
         self._usage_loaded.add(pid)
         bases: dict[str, Usage] = {}
         events = self.store.list_events(pid, limit=100000)
-        for i, e in sorted(enumerate(events), key=lambda t: (str(t[1].get("time") or ""), t[0])):
+        for _i, e in sorted(enumerate(events), key=lambda t: (str(t[1].get("time") or ""), t[0])):
             if e.get("type", e.get("event_type")) == "node.retry" and e.get("node_id"):
                 d = as_obj(e.get("data"), {}) or {}
                 bases[e["node_id"]] = Usage(int(d.get("attempts_base", 0)), int(d.get("tokens_base", 0)), float(d.get("seconds_base", 0.0)))

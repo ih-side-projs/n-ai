@@ -12,7 +12,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from .registry import get_registry, ToolRegistry
+from .registry import ToolRegistry, get_registry
 from .sandbox import Sandbox
 
 
@@ -125,10 +125,8 @@ class MCPServer:
         if self.sandbox is None:
             self.sandbox = Sandbox(Path.cwd())
         
-        # Import tool families to register them
-        from .families import data_files, project_introspection
-        data_files.set_sandbox(self.sandbox)
-        project_introspection.set_sandbox(self.sandbox)
+        # Tool families register on import; sandbox is passed per call via registry.
+        from .families import data_files, project_introspection  # noqa: F401
         
         reader = asyncio.StreamReader()
         protocol = asyncio.StreamReaderProtocol(reader)
@@ -152,7 +150,7 @@ class MCPServer:
             
             response = await self.handle_request(request)
             if response is not None:
-                writer.write((json.dumps(response) + "\n").encode("utf-8"))
+                writer.write(json.dumps(response) + "\n")
                 await writer.drain()
 
 

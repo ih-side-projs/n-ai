@@ -1,8 +1,10 @@
 """JSON schemas for SS-SPEC stage outputs (X1)."""
 from __future__ import annotations
+
 import json
 from pathlib import Path
 from typing import Any
+
 _SCHEMAS_DIR = Path(__file__).resolve().parent / "schemas"
 def load_schema(name: str) -> dict[str, Any]:
     path = _SCHEMAS_DIR / f"{name}.json"

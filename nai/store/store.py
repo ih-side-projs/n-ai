@@ -15,9 +15,10 @@ import tempfile
 import threading
 import uuid
 import zipfile
+from collections.abc import Iterator, Sequence
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
-from typing import Any, Iterator, Sequence
+from typing import Any
 
 from .errors import (
     DependencyCycleError,
@@ -28,14 +29,14 @@ from .errors import (
 )
 from .hashing import canonical_json, content_hash, sha1_text
 
-
 NODE_STATUSES = {
     "draft", "awaiting_approval", "approved", "ready", "running", "verifying",
     "done", "failed", "escalated", "blocked", "stale",
 }
 NODE_KINDS = {"system", "subsystem", "component", "leaf", "integration"}
 JOB_KINDS = {
-    "decompose", "interfaces", "check_interfaces", "component_spec", "reconcile",
+    "clarify", "decompose", "select_map", "interfaces", "check_interfaces",
+    "component_spec", "lint", "reconcile",
     "contract_stub", "author_tests", "implement", "verify", "integrate", "diagnose", "review",
 }
 ARTIFACT_KINDS = {"spec", "contract", "code", "test", "output-file", "report", "log"}
@@ -50,13 +51,13 @@ _ALLOWED_TRANSITIONS: dict[str, set[str]] = {
     "draft": {"awaiting_approval", "stale"},
     "awaiting_approval": {"approved", "stale"},
     "approved": {"ready", "stale"},
-    "ready": {"running", "stale"},
-    "running": {"verifying", "failed", "stale"},
-    "verifying": {"done", "failed", "stale"},
+    "ready": {"running", "blocked", "stale"},
+    "running": {"verifying", "failed", "blocked", "stale"},
+    "verifying": {"done", "failed", "blocked", "stale"},
     "done": {"stale"},
     "failed": {"ready", "escalated", "stale"},
     "escalated": {"ready", "stale"},
-    "blocked": {"stale"},
+    "blocked": {"failed", "ready", "stale"},
     "stale": {"draft", "ready"},
 }
 
@@ -182,7 +183,7 @@ class Store:
         self._backup_thread = threading.Thread(target=run, name="nai-daily-backup", daemon=True)
         self._backup_thread.start()
 
-    def __enter__(self) -> "Store":
+    def __enter__(self) -> Store:
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:
@@ -304,14 +305,21 @@ class Store:
     def list_events(
         self, project_id: str, *, node_id: str | None = None, limit: int = 500
     ) -> list[dict[str, Any]]:
+        """Return the most recent `limit` events, in chronological order.
+
+        Newest-first selection matters on long projects: callers restoring pause
+        state or budget bases must see recent events, not the oldest ones.
+        """
         if node_id:
             rows = self.conn.execute(
-                "SELECT * FROM events WHERE project_id=? AND node_id=? ORDER BY time, id LIMIT ?",
+                "SELECT * FROM (SELECT * FROM events WHERE project_id=? AND node_id=? "
+                "ORDER BY time DESC, id DESC LIMIT ?) ORDER BY time, id",
                 (project_id, node_id, int(limit)),
             ).fetchall()
         else:
             rows = self.conn.execute(
-                "SELECT * FROM events WHERE project_id=? ORDER BY time, id LIMIT ?",
+                "SELECT * FROM (SELECT * FROM events WHERE project_id=? "
+                "ORDER BY time DESC, id DESC LIMIT ?) ORDER BY time, id",
                 (project_id, int(limit)),
             ).fetchall()
         result = []
@@ -580,7 +588,10 @@ class Store:
             for dependency_id in dep_map[node_id]:
                 if dependency_id not in by_id:
                     raise DependencyError(f"node {node_id} references missing dependency {dependency_id}")
-                dependency_hashes.append(calculate(dependency_id))
+                calculate(dependency_id)  # cycle detection + update the dependency itself
+                # Only the dependency's interface participates (amended §4).
+                dep_contract = json.loads(by_id[dependency_id]["contract_json"] or "{}")
+                dependency_hashes.append(sha1_text(canonical_json(dep_contract)))
             new_hash = content_hash(
                 row["spec_text"],
                 json.loads(row["contract_json"] or "{}"),
@@ -796,7 +807,7 @@ class Store:
         return job_id
 
     def update_job(self, job_id: str, **changes: Any) -> None:
-        allowed = {"status", "attempt", "result_ref", "tokens_in", "tokens_out", "started_at", "ended_at", "error"}
+        allowed = {"status", "attempt", "result_ref", "input_ref", "tokens_in", "tokens_out", "started_at", "ended_at", "error"}
         unknown = set(changes) - allowed
         if unknown:
             raise ValueError(f"unsupported job fields: {', '.join(sorted(unknown))}")
@@ -805,6 +816,8 @@ class Store:
         values = dict(changes)
         if "result_ref" in values:
             values["result_ref_json"] = _json_object(values.pop("result_ref"), "result_ref")
+        if "input_ref" in values:
+            values["input_ref_json"] = _json_object(values.pop("input_ref"), "input_ref")
         if "status" in values and values["status"] not in {"queued", "running", "succeeded", "failed", "cancelled"}:
             raise ValueError(f"invalid job status: {values['status']}")
         with self._transaction() as conn:
@@ -833,6 +846,7 @@ class Store:
         model_role: str | None = None,
         limit: int = 500,
     ) -> list[dict[str, Any]]:
+        """Return the most recent `limit` matching jobs, in chronological order."""
         clauses, args = ["project_id=?"], [project_id]
         if status:
             clauses.append("status=?")
@@ -842,7 +856,8 @@ class Store:
             args.append(model_role)
         args.append(int(limit))
         rows = self.conn.execute(
-            f"SELECT * FROM jobs WHERE {' AND '.join(clauses)} ORDER BY created_at, id LIMIT ?", args
+            f"SELECT * FROM (SELECT * FROM jobs WHERE {' AND '.join(clauses)} "
+            "ORDER BY created_at DESC, id DESC LIMIT ?) ORDER BY created_at, id", args
         ).fetchall()
         out = []
         for row in rows:
@@ -1421,7 +1436,7 @@ class _BundleReader:
         self.source = source
         self.archive: zipfile.ZipFile | None = None
 
-    def __enter__(self) -> "_BundleReader":
+    def __enter__(self) -> _BundleReader:
         if self.source.is_dir():
             self.archive = None
         elif self.source.is_file() and zipfile.is_zipfile(self.source):

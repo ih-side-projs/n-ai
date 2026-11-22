@@ -10,10 +10,27 @@
 | `nai-web` | `nai.web.server:main` | local FastAPI dashboard |
 | `nai-bench` | `nai.eval.cli:bench_main` | benchmark runner |
 | `nai-service` | `nai.service.cli:service_main` | service supervisor control CLI |
+| `nai-doctor` | `nai.doctor:main` | offline integration self-check |
 
 Subcommands are registered through `nai.cli.register_subcommand()`; `python -m nai`
 uses the same dispatcher as the `nai` script. `python devswarm.py` is the original
 v1 entry point.
+
+## `nai doctor` — integration self-check
+
+```bash
+nai doctor
+nai doctor --json
+nai --doctor
+python -m nai.doctor
+```
+
+Runs offline (no model server required) and checks subsystem imports, CLI
+subcommand registration, job-handler/planner coverage against the real
+`PlanContext`, artifact kinds, schema artifacts, package data, a temporary
+SQLite store migration, and the tool registry. Exits non-zero when a check
+fails. Run this first when subsystems pass their own tests but integration
+behaves unexpectedly.
 
 ## `nai service` — background service
 

@@ -7,13 +7,28 @@ size limits, and make no network calls. (TLS-5)
 """
 from __future__ import annotations
 
-import os
-import signal
-import subprocess
-import threading
-import time
+import contextvars
 from pathlib import Path
 from typing import Any
+
+
+def _mp_runner(q, fn, args, kwargs):
+    """Picklable top-level target for killable tool execution."""
+    try:
+        q.put((True, fn(*args, **kwargs)))
+    except Exception as exc:  # noqa: BLE001
+        q.put((False, exc))
+
+
+# Per-call sandbox: each tool call gets its own sandbox without mutating
+# module globals, so concurrent jobs cannot overwrite each other's root.
+_current_sandbox: contextvars.ContextVar[Sandbox | None] = contextvars.ContextVar(
+    "nai_current_sandbox", default=None
+)
+
+
+def get_current_sandbox() -> Sandbox | None:
+    return _current_sandbox.get()
 
 
 class SandboxError(Exception):
@@ -29,7 +44,10 @@ class Sandbox:
     - Path policy: writes only allowed in configured writable directories
     - Per-tool timeouts
     - Output size limits
-    - No network calls (enforced by not providing network access)
+
+    NOTE: tools run in-process; there is no OS-level network enforcement. Tools
+    must not make network calls. OS-level isolation belongs in the command runner
+    (Docker with `--network none` where available).
     """
     
     def __init__(
@@ -160,19 +178,29 @@ class Sandbox:
             except Exception as e:
                 error[0] = e
         
-        thread = threading.Thread(target=target)
-        thread.daemon = True
-        thread.start()
-        thread.join(timeout=timeout)
-        
-        if thread.is_alive():
-            # Timeout - can't actually kill the thread in Python, but we can raise
-            raise SandboxError(f"ERROR: tool timeout after {timeout}s")
-        
-        if error[0]:
-            raise error[0]
-        
-        return result[0]
+        # Run in a child *process* so a timeout can genuinely kill a runaway tool.
+        import multiprocessing
+
+        ctx = multiprocessing.get_context("fork")
+        q = ctx.Queue()
+        proc = ctx.Process(target=_mp_runner, args=(q, fn, args, kwargs))
+        proc.start()
+        proc.join(timeout=timeout)
+        if proc.is_alive():
+            proc.terminate()
+            proc.join(2)
+            if proc.is_alive():
+                proc.kill()
+                proc.join(1)
+            raise SandboxError(f"ERROR: tool timeout after {timeout}s (process killed)")
+        if not q.empty():
+            ok, value = q.get_nowait()
+            if ok:
+                return value
+            raise value
+        if proc.exitcode not in (0, None):
+            raise SandboxError(f"ERROR: tool process exited {proc.exitcode}")
+        return None
     
     def limit_output(self, output: str) -> str:
         """Limit output size, truncate if necessary (total stays within the limit)."""
@@ -185,18 +213,19 @@ class Sandbox:
         return output
 
 
-# Convenience: create a sandbox from a path policy (compatible with WP1's PathPolicy)
 def create_sandbox_from_policy(workspace_root: Path, policy: Any) -> Sandbox:
-    """Create a sandbox from a WP1 PathPolicy."""
+    """Create a sandbox that honours a WP1 PathPolicy (simple glob-to-path conversion)."""
+    root = Path(workspace_root).resolve()
     writable = []
     readonly = []
-    
-    if hasattr(policy, 'writable'):
-        for pattern in policy.writable:
-            # Convert glob pattern to path
-            # For simplicity, we use the workspace root + pattern
-            # This is a simplification - real implementation would expand globs
-            pass
-    
-    # Default: outputs/ is writable
-    return Sandbox(workspace_root)
+    for attr, target in (("writable", writable), ("readonly", readonly)):
+        for pattern in getattr(policy, attr, ()) or ():
+            cleaned = str(pattern).rstrip("/")
+            if cleaned in ("", ".", "*"):
+                candidate = root
+            elif cleaned.endswith("**"):
+                candidate = root / cleaned[:-2].rstrip("/")
+            else:
+                candidate = root / cleaned
+            target.append(candidate.resolve())
+    return Sandbox(root, writable_dirs=writable, readonly_dirs=readonly)

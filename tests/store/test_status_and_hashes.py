@@ -45,9 +45,11 @@ def test_spec_change_marks_done_node_and_transitive_dependents_stale(store, proj
     first_row = store.get_node(first)
     second_row = store.get_node(second)
     assert first_row["status"] == "stale"
-    assert second_row["status"] == "stale"
+    # Amended §4: only a dependency's *interface* participates in the hash.
+    # A spec-text-only edit must not invalidate the dependent.
+    assert second_row["status"] == "done"
     assert first_row["content_hash"] != first_hash
-    assert second_row["content_hash"] != second_hash
+    assert second_row["content_hash"] == second_hash
     assert first_row["built_hash"] == first_hash
     assert second_row["built_hash"] == second_hash
 

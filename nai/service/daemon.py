@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import fcntl
-import json
 import os
 import signal
 import socket
@@ -113,6 +112,11 @@ class ServiceDaemon:
             pass
         server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         server.bind(str(sock_path))
+        # Only the owner may connect to the control socket (TLS-style local IPC).
+        try:
+            sock_path.chmod(0o600)
+        except OSError:
+            pass
         server.listen(16)
         server.settimeout(0.5)
         self._server = server
@@ -120,7 +124,7 @@ class ServiceDaemon:
             while not self._stop.is_set():
                 try:
                     conn, _ = server.accept()
-                except socket.timeout:
+                except TimeoutError:
                     continue
                 except OSError:
                     break
@@ -204,6 +208,7 @@ class ServiceDaemon:
         except Exception:
             pass
         return {
+            "running": True,
             "pid": os.getpid(),
             "started_at": self.started_at,
             "state_dir": str(self.state_dir),
@@ -223,10 +228,17 @@ class ServiceDaemon:
         if name in ("service", "daemon", ""):
             path = self.config.log_dir / "service.log"
             if path.exists():
-                with open(path, "r", encoding="utf-8", errors="replace") as fh:
+                with open(path, encoding="utf-8", errors="replace") as fh:
                     return "".join(fh.readlines()[-lines:])
             return ""
-        raise KeyError(f"unknown log: {name}")
+        # Prevent path traversal via explicit log filenames
+        if not __import__("re").fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}", name):
+            raise ValueError("invalid log name")
+        path = self.config.log_dir / f"{name}.log"
+        if path.resolve().parent != self.config.log_dir.resolve() or not path.is_file():
+            raise KeyError(f"unknown log: {name}")
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            return "".join(fh.readlines()[-lines:])
 
     def restart_component(self, name: str) -> dict[str, Any]:
         if name in self.children:
@@ -237,12 +249,29 @@ class ServiceDaemon:
             return {"restarted": name}
         raise KeyError(f"unknown component: {name}")
 
+    @staticmethod
+    def _validate_job_name(name: str) -> str:
+        """Job ids become log filenames; restrict to a safe character set."""
+        import re
+
+        if not name or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}", name):
+            raise ValueError("invalid job name: use letters, digits, '.', '_' or '-' (max 64 chars)")
+        if name in (".", "..") or name.startswith("."):
+            raise ValueError("invalid job name")
+        return name
+
     def spawn_job(self, argv: list[str], name: str | None = None) -> dict[str, Any]:
         """Spawn a new `nai ...` instance as a supervised job."""
         py = self.config.python or sys.executable
-        job_id = name or f"job-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
+        job_id = self._validate_job_name(name) if name else \
+            f"job-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
         if job_id in self.jobs:
             raise ValueError(f"duplicate job id: {job_id}")
+        # Extra guard: the resolved log path must stay inside the log directory.
+        log_dir = self.config.log_dir.resolve()
+        log_path = (log_dir / f"{job_id}.log").resolve()
+        if log_path.parent != log_dir:
+            raise ValueError("invalid job name: path escape")
         proc = ManagedProcess(
             name=job_id,
             command=[py, "-m", "nai", *argv],
@@ -258,7 +287,7 @@ class ServiceDaemon:
 
     # ---------------------------------------------------------------- main loop
     def _watch_children(self) -> None:
-        for name, proc in self.children.items():
+        for _name, proc in self.children.items():
             state = proc.poll()
             if state == "crashed":
                 if proc.auto_restart and proc.restarts < proc.restart_limit:
@@ -268,7 +297,7 @@ class ServiceDaemon:
                     proc.start()
                 else:
                     proc.retire()
-        for jid, proc in list(self.jobs.items()):
+        for _jid, proc in list(self.jobs.items()):
             if proc.poll() != "running":
                 continue  # keep finished jobs for status queries; explicit cleanup removes them
 
@@ -314,10 +343,38 @@ class ServiceDaemon:
             self.release_lock()
         return 0
 
+    def _daemon_alive(self) -> bool:
+        """Check if a live daemon owns the socket (stale sockets after a crash are common)."""
+        pid_file = self.config.pid_path
+        if pid_file.is_file():
+            try:
+                pid = int(pid_file.read_text().strip())
+                os.kill(pid, 0)  # signal 0: existence check
+                return True
+            except (ValueError, OSError):
+                pass
+        # Fall back to probing the socket: if connect succeeds, something is serving.
+        if self.config.socket_path.exists():
+            try:
+                from .protocol import request
+
+                request(self.config.socket_path, "status")
+                return True
+            except Exception:
+                pass
+        return False
+
     def start_detached(self) -> int:
         """Spawn a detached supervisor process and return its PID."""
-        if self.config.socket_path.exists():
-            raise ServiceAlreadyRunning("service socket exists; run `nai service status` first")
+        if self.config.socket_path.exists() or self.config.pid_path.exists():
+            if self._daemon_alive():
+                raise ServiceAlreadyRunning("service already running; run `nai service status` first")
+            # Stale artifacts from a crash: remove them and continue.
+            for path in (self.config.socket_path, self.config.pid_path):
+                try:
+                    path.unlink()
+                except OSError:
+                    pass
         py = self.config.python or sys.executable
         log_path = self.config.log_dir / "service.log"
         log_path.parent.mkdir(parents=True, exist_ok=True)

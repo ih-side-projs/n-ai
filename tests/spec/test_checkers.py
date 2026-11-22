@@ -1,7 +1,8 @@
 """Tests for SS-SPEC checkers (SPEC-3, SPEC-4)."""
 from __future__ import annotations
-import pytest
+
 from nai.spec.checkers import check_interfaces, lint_spec
+
 
 def test_check_interfaces_pass(sample_contract):
     findings = check_interfaces(sample_contract)

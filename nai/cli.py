@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import argparse
 import sys
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 from . import terminal
 from .coder import Coder
@@ -53,6 +53,7 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--config", metavar="FILE", help="TOML config file (default: $NAI_CONFIG, then ./nai.toml if present)")
     ap.add_argument("--profile", metavar="NAME", help="Model profile from the config file")
     ap.add_argument("--call-log", metavar="FILE", help="Append every model call (full prompt and reply) to this JSONL file")
+    ap.add_argument("--doctor", action="store_true", help="Run integration self-checks and exit")
     return ap
 
 
@@ -62,6 +63,9 @@ def main(argv: list[str] | None = None) -> None:
         sys.exit(SUBCOMMANDS[argv[0]](argv[1:]) or 0)
     ap = build_parser()
     a = ap.parse_args(argv)
+    if a.doctor:
+        from .doctor import main as doctor_main
+        sys.exit(doctor_main([]))
     try:
         cfg = load_config(a.config)
         profile = cfg.get_profile(a.profile, reasoner=a.reasoner, coder=a.coder, ctx=a.ctx, coder_ctx=a.coder_ctx,

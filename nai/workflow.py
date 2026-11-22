@@ -7,7 +7,8 @@ project level: different nodes can be in different phases at the same time.
 from __future__ import annotations
 
 from collections import Counter
-from typing import Any, Iterable
+from collections.abc import Iterable
+from typing import Any
 
 DESIGN = "design"
 IMPLEMENTATION = "implementation"

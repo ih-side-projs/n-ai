@@ -44,7 +44,7 @@ class ServiceConfig:
         return self.db_path or self.state_dir / "nai.sqlite3"
 
     @classmethod
-    def from_env(cls, state_dir: str | Path | None = None, **overrides) -> "ServiceConfig":
+    def from_env(cls, state_dir: str | Path | None = None, **overrides) -> ServiceConfig:
         import sys
 
         root = Path(state_dir or os.environ.get("NAI_STATE_DIR", ".nai"))

@@ -72,7 +72,7 @@ All persistent entities live in SQLite (SS-STORE). Ids are short unique strings.
 - **ModelProfile**: `name`, `reasoner` and `coder` blocks each with `model_id`, `ctx`, `max_tokens`, sampling (`temperature`, `top_p`, `top_k`, extras), plus `swap_cost_seconds` (measured, optional).
 - **ToolDef**: `name`, `description`, `parameters` (JSON schema), `family`, `side_effects` (`none`, `writes-outputs`), `timeout_seconds`.
 
-**Content hash.** `content_hash(node) = sha1(spec_text + canonical_json(contract) + content_hashes of its depends_on nodes + content_hash of parent contract)`. A node whose hash differs from the hash it was last built against is `stale`.
+**Content hash.** `content_hash(node) = sha1(spec_text + canonical_json(contract) + interface_hashes of its depends_on nodes + content_hash of parent contract)`, where `interface_hash(dep) = sha1(canonical_json(dep.contract))`. Only a dependency's *interface* participates: editing a dependency's internal implementation or spec text must not invalidate dependents whose interface is unchanged. A node whose hash differs from the hash it was last built against is `stale`.
 
 ## 5. Cross-cutting rules
 
@@ -107,7 +107,7 @@ Stack: standard library `sqlite3`, WAL mode, plain SQL migrations. No ORM.
 - STO-1. Schema implements the entities in section 4, with foreign keys on and indexes on `(project_id, status)`, `(node_id)`, `(job status, model_role)` and event `(project_id, time)`.
 - STO-2. Migrations are numbered SQL files applied in order at startup; the applied version is stored; downgrade is not supported.
 - STO-3. One writer process (the scheduler/runner) writes; the web server opens the database read-only for queries and sends control commands (pause, approve, retry) by inserting rows into a `commands` table that the writer polls.
-- STO-4. Node status transitions are enforced in one function. Allowed: `draft -> awaiting_approval -> approved -> ready -> running -> verifying -> done`; `running or verifying -> failed`; `failed -> ready` (retry) or `escalated`; `escalated -> ready` after resolution; any status except `done` -> `stale` when the content hash changes; `stale -> draft or ready` by owner action or rebuild; `done -> stale` likewise. Any other transition raises an error and writes an event.
+- STO-4. Node status transitions are enforced in one function. Allowed: `draft -> awaiting_approval -> approved -> ready -> running -> verifying -> done`; `ready or running or verifying -> blocked` when a budget is exhausted (SCH-5); `blocked -> failed` when the failure ladder takes over, `blocked -> ready` on owner retry, or `blocked -> stale` on content change; `running or verifying -> failed`; `failed -> ready` (retry) or `escalated`; `escalated -> ready` after resolution; any status except `done` -> `stale` when the content hash changes; `stale -> draft or ready` by owner action or rebuild; `done -> stale` likewise. Any other transition raises an error and writes an event.
 - STO-5. `content_hash` is recomputed and compared whenever a node spec, a contract, or a dependency changes; stale propagation marks all transitive dependents stale in one transaction.
 - STO-6. Prompts, responses, spec files and code are stored as artifacts on disk under the project workspace in `.nai/artifacts/`; the database holds paths and hashes.
 - STO-7. Project export and import: a project can be exported to a single folder or archive (database rows as JSON plus artifacts) and re-imported on another machine.
@@ -118,8 +118,8 @@ Stack: standard library `sqlite3`, WAL mode, plain SQL migrations. No ORM.
 - SCH-1. A long-running runner process (`nai run`) polls the store for ready nodes and queued jobs and executes them. It is the only process that calls models or runs commands.
 - SCH-2. **Model-affinity batching.** Jobs carry a `model_role`. The scheduler drains all runnable jobs for the currently loaded role before switching, up to a configurable cap on consecutive jobs or elapsed time, so model swaps are minimised. Swap count and swap seconds are recorded.
 - SCH-3. Within a role, jobs run in priority order: higher-level nodes first, then older first. Concurrency defaults to 1 and is configurable (for same-model parallel slots, see decision D4).
-- SCH-4. Dependency rule: a node becomes `ready` only when every node in `depends_on` is `done` and its parent's contract is approved.
-- SCH-5. Per-node budgets (X5) are enforced; on exhaustion the node moves to `failed` and the failure ladder (BLD-9) takes over.
+- SCH-4. Dependency rule: a node becomes `ready` when its parent's contract is approved and either every node in `depends_on` is `done`, or its next scheduled job is `author_tests` (BLD-8 batches test authoring ahead of implementation, since tests are written from the spec and stubs, not from dependency implementations). `implement` jobs still require all dependencies `done`.
+- SCH-5. Per-node budgets (X5) are enforced; on exhaustion the node moves to `blocked` (a visible, named state), then `failed` as the failure ladder (BLD-9) takes over. The owner may retry a blocked node (`blocked -> ready`) with a fresh budget.
 - SCH-6. Commands: `pause`, `resume`, `cancel job`, `retry node`, `approve`, `reject`. Pause finishes the current job, then stops. Cancel kills a running command's process group.
 - SCH-7. Crash recovery per X4. On startup the runner reports what it recovered as events.
 - SCH-8. Scheduling windows: an optional config allows work only in given hours (for example overnight) and an `--until` option for a one-off.

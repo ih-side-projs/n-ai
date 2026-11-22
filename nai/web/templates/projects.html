@@ -31,11 +31,11 @@
       </dl>
       <div class="project-actions">
         <a class="text-link" href="/projects/{{ p.id }}">Open →</a>
-        <form method="post" action="/projects/{{ p.id }}/control/pause" class="inline-form">
+        <form method="post" action="/projects/{{ p.id }}/control/pause" class="inline-form control-form">
           <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
           <button type="submit" class="button ghost small" {% if p.status == 'paused' %}disabled{% endif %}>Pause</button>
         </form>
-        <form method="post" action="/projects/{{ p.id }}/control/cancel" class="inline-form" onsubmit="return confirm('Cancel this project?')">
+        <form method="post" action="/projects/{{ p.id }}/control/cancel" class="inline-form control-form" data-confirm="Cancel this project?">
           <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
           <button type="submit" class="button ghost small danger">Cancel</button>
         </form>

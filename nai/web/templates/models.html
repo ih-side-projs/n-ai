@@ -3,12 +3,38 @@
 {% block content %}
 <div class="page-heading"><div><p class="eyebrow">MODELS · MODEL SERVER</p><h1>Models</h1><p class="muted">Configured profiles and read-only status from the local model server.</p></div><a class="button secondary" href="/api/models">JSON</a></div>
 <section class="summary-grid">
-  <article class="panel metric-card"><span class="metric-label">Server health</span><strong class="metric-value">{% if snapshot.healthy %}Healthy{% elif snapshot.healthy is sameas false %}Unavailable{% else %}Not configured{% endif %}</strong><span class="tiny muted">{{ snapshot.error or snapshot.health_response.raw|default('') }}</span></article>
-  <article class="panel metric-card"><span class="metric-label">Available models</span><strong class="metric-value">{{ snapshot.models|length }}</strong></article>
-  <article class="panel metric-card"><span class="metric-label">Loaded models</span><strong class="metric-value">{{ snapshot.loaded_models|length }}</strong><span class="tiny muted">From llama-swap /running when supported</span></article>
+  <article class="panel metric-card"><span class="metric-label">Server health</span><strong class="metric-value metric-value-text">{% if snapshot.healthy %}Healthy{% elif snapshot.healthy is sameas false %}Unavailable{% else %}Not configured{% endif %}</strong><span class="tiny muted metric-detail">{{ snapshot.error or snapshot.health_response.raw|default('') }}</span></article>
+  <article class="panel metric-card"><span class="metric-label">Available models</span><strong class="metric-value">{{ snapshot.models|length }}</strong><span class="tiny muted metric-detail">From /v1/models</span></article>
+  <article class="panel metric-card"><span class="metric-label">Loaded models</span><strong class="metric-value">{{ snapshot.loaded_models|length }}</strong><span class="tiny muted metric-detail">From llama-swap /running</span></article>
 </section>
 <div class="content-grid">
-  <section class="panel span-two"><h2>Configured model profiles</h2>{% if profiles %}<div class="table-wrap"><table><thead><tr><th>Profile</th><th>Reasoner</th><th>Coder</th><th>Swap cost</th></tr></thead><tbody>{% for profile in profiles %}<tr><td><strong>{{ profile.name }}</strong></td><td>{{ profile.reasoner.model_id|default('—') }}<span class="tiny muted">ctx {{ profile.reasoner.ctx|default('—') }} · max {{ profile.reasoner.max_tokens|default('—') }}</span></td><td>{{ profile.coder.model_id|default('—') }}<span class="tiny muted">ctx {{ profile.coder.ctx|default('—') }} · max {{ profile.coder.max_tokens|default('—') }}</span></td><td>{{ profile.swap_cost_seconds if profile.swap_cost_seconds is not none else '—' }}</td></tr>{% endfor %}</tbody></table></div>{% else %}<p class="muted">No ModelProfiles are stored yet.</p>{% endif %}</section>
+  <section class="panel span-two"><h2>Configured model profiles</h2>
+    <p class="muted tiny">Change the reasoner/coder model ids here. Saved profiles override the built-in defaults for the runner and the model client.</p>
+    {% if profiles %}<div class="table-wrap"><table><thead><tr><th>Profile</th><th>Reasoner model id</th><th>Coder model id</th><th>Swap cost</th><th>Actions</th></tr></thead><tbody>
+    {% for profile in profiles %}
+    <tr>
+      <td><strong>{{ profile.name }}</strong><br><span class="tiny muted">ctx {{ profile.reasoner.ctx|default('—') }} · max {{ profile.reasoner.max_tokens|default('—') }}</span></td>
+      <td>
+        <form method="post" action="/models/profile" class="inline-form">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <input type="hidden" name="name" value="{{ profile.name }}"><input type="hidden" name="role" value="reasoner">
+          <input type="text" name="model_id" value="{{ profile.reasoner.model_id|default('') }}" required>
+          <button class="button secondary small">Save</button>
+        </form>
+      </td>
+      <td>
+        <form method="post" action="/models/profile" class="inline-form">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <input type="hidden" name="name" value="{{ profile.name }}"><input type="hidden" name="role" value="coder">
+          <input type="text" name="model_id" value="{{ profile.coder.model_id|default('') }}" required>
+          <button class="button secondary small">Save</button>
+        </form>
+      </td>
+      <td>{{ profile.swap_cost_seconds if profile.swap_cost_seconds is not none else '—' }}</td>
+      <td><span class="tiny muted">{{ 'stored' if profile.name in stored_names else 'built-in default' }}</span></td>
+    </tr>
+    {% endfor %}</tbody></table></div>{% else %}<p class="muted">No ModelProfiles are stored yet.</p>{% endif %}
+  </section>
   <section class="panel"><h2>Loaded model(s)</h2>{% if snapshot.loaded_models %}<ul class="plain-list">{% for model in snapshot.loaded_models %}<li><strong>{{ model.id }}</strong><span class="status status-running">{{ model.status }}</span></li>{% endfor %}</ul>{% elif snapshot.configured %}<p class="muted">No loaded model was reported by /running.</p>{% else %}<p class="muted">Configure <code>NAI_LLAMA_SWAP_URL</code> to inspect the local server.</p>{% endif %}</section>
   <section class="panel"><h2>Server model catalogue</h2>{% if snapshot.models %}<ul class="plain-list">{% for model in snapshot.models %}<li><strong>{{ model.id|default('unknown id') }}</strong><span class="tiny muted">{{ model.owned_by|default(model.name|default('')) }}</span></li>{% endfor %}</ul>{% else %}<p class="muted">No model listing is available.</p>{% endif %}</section>
   <section class="panel span-two"><h2>Smoke test and latency probe</h2><p class="muted">Sends a short, fixed prompt to a selected local model. This can load or swap a model in llama-swap.</p>
