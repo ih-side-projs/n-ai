@@ -56,6 +56,9 @@ class FakeStore:
     def list_projects(self, status=None):
         return [copy.deepcopy(p) for p in self.projects.values() if status in (None, p["status"])]
 
+    def set_project_status(self, project_id, status):
+        self.projects[project_id]["status"] = status
+
     # -- nodes -----------------------------------------------------------------------------------------
     def create_node(self, project_id, name, kind, *, parent_id=None, objective="", spec_text="", contract=None, depends_on=(),
                     test_command=None):

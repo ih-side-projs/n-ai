@@ -197,6 +197,67 @@ async def test_web_command_queue_full_control_flow(client: AsyncClient, db_path:
 
 
 
+
+async def test_web_project_lifecycle_cancel_archive_and_filter(client: AsyncClient, db_path: Path, tmp_path: Path):
+    """Cancel leaves Active; archived projects hide until the owner asks for them."""
+    pid, token = await _create_project(client, "Visible Project")
+
+    with Store(db_path, read_only=False) as store:
+        hidden = store.create_project("Hidden Test", "old test project", settings={})
+        store.create_node(hidden, "root", "system")
+        store.set_project_status(hidden, "archived")
+
+    response = await client.get("/projects")
+    assert response.status_code == 200
+    assert "Visible Project" in response.text
+    assert "Hidden Test" not in response.text
+    assert "Show archived (1)" in response.text
+
+    response = await client.get("/projects?show_archived=1")
+    assert "Hidden Test" in response.text
+    assert "Hide archived" in response.text
+
+    # Archive enqueues a command; the project status changes when the runner processes it.
+    response = await client.post(f"/projects/{pid}/archive", data={
+        "csrf_token": token,
+    }, follow_redirects=False)
+    assert response.status_code == 303
+    assert _snapshot(db_path, pid)["project"]["status"] == "active"
+    _process_commands(db_path, tmp_path)
+    assert _snapshot(db_path, pid)["project"]["status"] == "archived"
+
+    response = await client.get("/projects")
+    assert "Visible Project" not in response.text
+
+    response = await client.post(f"/projects/{pid}/unarchive", data={
+        "csrf_token": token,
+    }, follow_redirects=False)
+    assert response.status_code == 303
+    _process_commands(db_path, tmp_path)
+    assert _snapshot(db_path, pid)["project"]["status"] == "active"
+
+    # Project-wide cancel must not leave the card showing Active.
+    response = await client.post(f"/projects/{pid}/control/cancel", data={
+        "csrf_token": token,
+    })
+    assert response.status_code == 200
+    _process_commands(db_path, tmp_path)
+    snap = _snapshot(db_path, pid)
+    assert snap["project"]["status"] == "cancelled"
+    assert any(e["type"] == "project.cancelled" for e in snap["events"])
+
+    response = await client.get("/projects")
+    assert "status-cancelled" in response.text
+
+    # Reopen restores a cancelled project to active via the same command.
+    response = await client.post(f"/projects/{pid}/unarchive", data={
+        "csrf_token": token,
+    }, follow_redirects=False)
+    assert response.status_code == 303
+    _process_commands(db_path, tmp_path)
+    assert _snapshot(db_path, pid)["project"]["status"] == "active"
+
+
 async def test_web_pages_json_api_and_tool_execution(client: AsyncClient, db_path: Path, tmp_path: Path):
     """Every major screen renders, its JSON mirror responds, and tools execute in a project workspace."""
     pid, token = await _create_project(client, "Web Pages E2E")

@@ -10,7 +10,7 @@ CREATE TABLE projects (
     brief TEXT NOT NULL DEFAULT '',
     workspace_path TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'active'
-        CHECK (status IN ('active', 'paused', 'done', 'archived')),
+        CHECK (status IN ('active', 'paused', 'done', 'cancelled', 'archived')),
     created_at TEXT NOT NULL,
     settings_json TEXT NOT NULL DEFAULT '{}'
 );

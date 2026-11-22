@@ -30,7 +30,7 @@ from .registry import BudgetExceeded, HandlerRegistry, JobCancelled, JobResult
 from .store_api import StoreActor, StoreProxy, serve
 from .util import SystemClock, as_obj, is_transient, iso
 
-INACTIVE = ("paused", "done", "archived")
+INACTIVE = ("paused", "done", "cancelled", "archived")
 LOG_LEVEL = {"red": "error", "yellow": "warning"}
 
 

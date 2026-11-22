@@ -33,6 +33,7 @@ NODE_STATUSES = {
     "draft", "awaiting_approval", "approved", "ready", "running", "verifying",
     "done", "failed", "escalated", "blocked", "stale",
 }
+PROJECT_STATUSES = {"active", "paused", "done", "cancelled", "archived"}
 NODE_KINDS = {"system", "subsystem", "component", "leaf", "integration"}
 JOB_KINDS = {
     "clarify", "decompose", "select_map", "interfaces", "check_interfaces",
@@ -43,7 +44,7 @@ ARTIFACT_KINDS = {"spec", "contract", "code", "test", "output-file", "report", "
 APPROVAL_STAGES = {"component-map", "interfaces", "component-spec", "escalation"}
 COMMAND_ACTIONS = {
     "pause", "resume", "cancel_job", "cancel", "retry_node", "approve", "reject",
-    "rerun_stage", "reorder",
+    "rerun_stage", "reorder", "archive", "unarchive",
 }
 
 # STO-4. A transition to stale is permitted from every state, including done.
@@ -228,18 +229,28 @@ class Store:
             if version != expected:
                 raise StoreError(f"migration gap: expected {expected:04d}, found {path.name}")
             script = path.read_text(encoding="utf-8")
-            self.conn.execute("BEGIN IMMEDIATE")
+            # A few migrations must rebuild a parent table. SQLite ignores
+            # PRAGMA foreign_keys inside a transaction, so opt out before BEGIN
+            # and restore enforcement afterwards.
+            fk_off = "PRAGMA FOREIGN_KEYS=OFF" in script.upper()
+            if fk_off:
+                self.conn.execute("PRAGMA foreign_keys=OFF")
             try:
+                self.conn.execute("BEGIN IMMEDIATE")
                 self._execute_sql_script(script)
                 self.conn.execute(
                     "INSERT INTO schema_migrations(version, name, applied_at) VALUES (?, ?, ?)",
                     (version, path.name, utc_now()),
                 )
             except Exception:
-                self.conn.rollback()
+                if self.conn.in_transaction:
+                    self.conn.rollback()
                 raise
             else:
                 self.conn.commit()
+            finally:
+                if fk_off:
+                    self.conn.execute("PRAGMA foreign_keys=ON")
             current = version
             expected = current + 1
 
@@ -395,7 +406,7 @@ class Store:
             "status": status if status is not None else current["status"],
             "settings_json": _json_object(settings, "settings") if settings is not None else canonical_json(current["settings"]),
         }
-        if values["status"] not in {"active", "paused", "done", "archived"}:
+        if values["status"] not in PROJECT_STATUSES:
             raise ValueError(f"invalid project status: {values['status']}")
         with self._transaction() as conn:
             conn.execute(
@@ -403,6 +414,12 @@ class Store:
                 (values["name"], values["brief"], values["workspace_path"], values["status"], values["settings_json"], project_id),
             )
             self._insert_event(conn, project_id, event_type="project.updated", message="Project details updated")
+
+    def set_project_status(self, project_id: str, status: str) -> None:
+        """Single validated entry point for owner/runtime project lifecycle changes."""
+        if status not in PROJECT_STATUSES:
+            raise ValueError(f"invalid project status: {status}")
+        self.update_project(project_id, status=status)
 
     def create_node(
         self,

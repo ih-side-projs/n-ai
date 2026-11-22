@@ -24,6 +24,9 @@ open:
   requirements, tests, approvals, tool_defs, model_profiles, backups.
 - `0002_extend_web_actions.sql` — extends command actions for web controls and
   adds tool schema columns.
+- `0003_extend_job_kinds.sql` — adds spec-pipeline job kinds.
+- `0004_project_lifecycle.sql` — adds `cancelled` project status (rebuilds the
+  `projects` table with FK enforcement temporarily disabled so child rows survive).
 
 `schema_migrations` records applied versions. `Store.backup_now()`,
 `backup_if_due()` and `backup_keep` provide UTC-daily snapshots.
@@ -38,6 +41,11 @@ any → stale → draft|ready
 
 `transition_node_status()` is the only status API and raises `InvalidTransition`
 for illegal edges after recording a rejection event.
+
+Project lifecycle statuses are `active`, `paused`, `done`, `cancelled` and
+`archived`. `set_project_status()` validates writes; a project-wide cancel moves
+`active`/`paused` to `cancelled`, and archive/restore moves between `archived`
+and `active`. The runner treats `cancelled` and `archived` as inactive.
 
 ## Content hashing
 

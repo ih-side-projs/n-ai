@@ -38,6 +38,9 @@ Open <http://127.0.0.1:8080>. OpenAPI docs are at `/api/docs`.
 - Approve/reject node specs (records an approval, transitions status).
 - Retry failed nodes, re-run a stage, mark a node stale.
 - Pause, resume, cancel a project or job, reorder node priorities.
+- Archive/restore projects; archived projects are hidden by default and visible via
+  `?show_archived=1` or the "Show archived" toggle.
+- A project-wide cancel sets status to `cancelled` so it no longer appears as Active.
 - All state-changing routes are POST-only and enqueue commands where appropriate.
 
 ## Editing with diff

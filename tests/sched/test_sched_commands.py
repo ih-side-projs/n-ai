@@ -334,3 +334,27 @@ def test_SCH6_payload_as_json_text_and_audit_event(store, pid, tmp_path):
     r.step()
     ev = store.events_of("command.processed")[0]
     assert ev["data"]["command_id"] == cid and ev["data"]["action"] == "pause" and ev["data"]["error"] is None
+
+
+def test_SCH6_project_cancel_marks_project_cancelled(store, pid, tmp_path):
+    store.create_job(pid, "verify", "coder")
+    r = make_runner(store, None, tmp_path)
+    cid = store.enqueue_command(pid, "cancel")
+    r.step()
+    assert store.get_project(pid)["status"] == "cancelled"
+    assert cmd_status(store, cid)[1] is None
+    assert store.events_of("project.cancelled")
+
+
+def test_SCH6_archive_and_unarchive_through_command_queue(store, pid, tmp_path):
+    r = make_runner(store, None, tmp_path)
+    store.enqueue_command(pid, "archive")
+    r.step()
+    assert store.get_project(pid)["status"] == "archived"
+
+    store.enqueue_command(pid, "unarchive")
+    r.step()
+    assert store.get_project(pid)["status"] == "active"
+    assert store.events_of("project.archived")
+    assert store.events_of("project.unarchived")
+

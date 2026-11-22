@@ -4,7 +4,8 @@ Actions (spaces, dashes and case are ignored, so "cancel job" == "cancel_job"):
 
   pause / resume    project (command's project_id); payload {"scope": "runner"} pauses the whole runner
   cancel_job        payload {"job_id": ...}, or the command's node_id (cancels every active job of the node)
-  cancel            cancel all active jobs of the project (or of the command's node)
+  cancel            cancel all active jobs and mark the project cancelled (or cancel one node's jobs)
+  archive/unarchive move the project to archived/active (owner hides test projects from the default list)
   retry_node        node_id: failed | escalated | stale -> ready, with a fresh budget
   rerun_stage       node_id, payload {"stage": "spec"|"build"|"test"|"verify"}: enqueue that job again
   reorder           payload {"order": [node_id, ...]}: persist the owner's priority order
@@ -74,7 +75,7 @@ class CommandProcessor:
         return "cancel_job needs payload.job_id or a node_id"
 
     def _cancel(self, pid, nid, payload):
-        """Cancel every active job of the project (or just the command's node)."""
+        """Cancel active jobs; a project-wide cancel also leaves `active` state."""
         jobs = []
         for status in ("queued", "running"):
             jobs.extend(self.r.store.list_jobs(pid, status=status, limit=5000))
@@ -82,6 +83,19 @@ class CommandProcessor:
             jobs = [j for j in jobs if j.get("node_id") == nid]
         for job in jobs:
             self.r.cancel_job(job["id"], "cancel")
+        if not nid:
+            self.r.store.set_project_status(pid, "cancelled")
+            self.r.store.record_event(pid, "project.cancelled", "Project work cancelled by owner")
+        self.r.mark_dirty()
+
+    def _archive(self, pid, nid, payload):
+        self.r.store.set_project_status(pid, "archived")
+        self.r.store.record_event(pid, "project.archived", "Project archived by owner")
+        self.r.mark_dirty()
+
+    def _unarchive(self, pid, nid, payload):
+        self.r.store.set_project_status(pid, "active")
+        self.r.store.record_event(pid, "project.unarchived", "Project restored to active by owner")
         self.r.mark_dirty()
 
     def _rerun_stage(self, pid, nid, payload):

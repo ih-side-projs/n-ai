@@ -298,9 +298,29 @@ def create_app(
 
     @app.get("/", response_class=HTMLResponse)
     @app.get("/projects", response_class=HTMLResponse)
-    def projects_page(request: Request, store: Store = Depends(get_store)):
-        projects = [project_summary(store, p) for p in store.list_projects()]
-        return render(request, "projects.html", {"projects": projects, "active_page": "projects"})
+    def projects_page(request: Request, show_archived: str | None = None,
+                      store: Store = Depends(get_store)):
+        show = str(show_archived or "").lower() in {"1", "true", "yes"}
+        all_projects = store.list_projects()
+        archived_count = sum(1 for p in all_projects if p.get("status") == "archived")
+        visible = all_projects if show else [p for p in all_projects if p.get("status") != "archived"]
+        projects = [project_summary(store, p) for p in visible]
+        return render(request, "projects.html", {
+            "projects": projects,
+            "archived_count": archived_count,
+            "show_archived": show,
+            "active_page": "projects",
+        })
+
+    @app.post("/projects/{project_id}/archive")
+    async def project_archive(project_id: str):
+        _enqueue_command(project_id, "archive")
+        return RedirectResponse(url="/projects", status_code=303)
+
+    @app.post("/projects/{project_id}/unarchive")
+    async def project_unarchive(project_id: str):
+        _enqueue_command(project_id, "unarchive")
+        return RedirectResponse(url="/projects", status_code=303)
 
     @app.post("/projects/create")
     async def projects_create(request: Request, name: str = Form(...), brief: str = Form("")):
@@ -481,8 +501,10 @@ def create_app(
     # JSON API (WEB-15): mirrors the read-only pages above.
     # ------------------------------------------------------------------
     @app.get("/api/projects")
-    def api_projects(store: Store = Depends(get_store)):
-        return {"projects": [project_summary(store, p) for p in store.list_projects()]}
+    def api_projects(show_archived: str | None = None, store: Store = Depends(get_store)):
+        show = str(show_archived or "").lower() in {"1", "true", "yes"}
+        projects = [p for p in store.list_projects() if show or p.get("status") != "archived"]
+        return {"projects": [project_summary(store, p) for p in projects]}
 
     @app.get("/api/projects/{project_id}")
     def api_project(project_id: str, store: Store = Depends(get_store)):

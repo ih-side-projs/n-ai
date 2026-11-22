@@ -58,7 +58,7 @@ Control principle: Python code owns control flow and state. A model never decide
 
 All persistent entities live in SQLite (SS-STORE). Ids are short unique strings. Times are UTC ISO-8601. JSON columns hold UTF-8 JSON.
 
-- **Project**: `id`, `name`, `brief` (owner's original text), `workspace_path`, `status` (`active`, `paused`, `done`, `archived`), `created_at`, `settings` (JSON: model profile name, size limits, test commands, target language and stack, and the target environment of TENV-1).
+- **Project**: `id`, `name`, `brief` (owner's original text), `workspace_path`, `status` (`active`, `paused`, `done`, `cancelled`, `archived`), `created_at`, `settings` (JSON: model profile name, size limits, test commands, target language and stack, and the target environment of TENV-1). `cancelled` is set by a project-wide cancel; `archived` hides a project from the default Projects view without deleting it.
 - **Node**: `id`, `project_id`, `parent_id` (null for the root), `kind` (`system`, `subsystem`, `component`, `leaf`, `integration`), `name` (lowercase-hyphenated), `objective` (one or two sentences), `spec_text` (markdown), `contract` (JSON, see below), `depends_on` (list of node ids, siblings only), `status`, `content_hash`, `attempts`, `test_command`, `created_at`, `updated_at`.
 - **Node status**: `draft` (being written), `awaiting_approval`, `approved`, `ready` (all dependencies done), `running`, `verifying`, `done`, `failed`, `escalated`, `blocked`, `stale` (an input changed). Allowed transitions are specified in STO-4.
 - **Contract** (the interface model; per parent node, describing its children): JSON with `entities` (name, fields: name, type, required, description), `components` (child node name, `provides`: functions or endpoints with signature, input entities, output entities, errors; `consumes`: references to other components' provides), `external_inputs`, `external_outputs`, `scenarios` (id, title, ordered steps each naming caller, callee, call, and fields passed). This structure is validated by a JSON schema stored in the repo (SPEC-5).
@@ -222,7 +222,7 @@ Stack (default, see D1): FastAPI, server-rendered templates, HTMX and server-sen
 - WEB-7. **Tools page:** the registry catalog with schemas, family, last test result, and a try-it form that calls a tool with sample arguments in the sandbox.
 - WEB-8. **Models page:** configured ModelProfiles, the server's `/v1/models` list, which model is loaded, health, and a button to run a quick smoke test and a latency probe.
 - WEB-9. **Artifacts browser:** project files, outputs and logs with download, plus a markdown and code viewer.
-- WEB-10. **Controls:** pause, resume, cancel, and priority reordering, implemented through the commands table (STO-3).
+- WEB-10. **Controls:** pause, resume, cancel, archive, restore, and priority reordering, implemented through the commands table (STO-3). A project-wide cancel moves the project to `cancelled`; archived projects are hidden from the default Projects page and available through a "Show archived" toggle.
 - WEB-11. **Escalation inbox** per ESC-1 to ESC-4.
 - WEB-12. **Settings:** model profiles, size limits, test commands, scheduling window, backup location.
 - WEB-13. All state-changing actions are POST requests with CSRF protection; no endpoint executes arbitrary shell input from the browser.
