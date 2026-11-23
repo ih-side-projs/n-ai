@@ -382,8 +382,9 @@ class TestStructuredProjectIntake:
     async def test_project_page_shows_info_gathering_panel(self, client, initialized_store):
         pid = initialized_store.conn.execute("SELECT id FROM projects LIMIT 1").fetchone()[0]
         settings = {
-            "intake": {"description": "x"},
+            "intake": {"description": "x", "answers": {}},
             "intake_complete": False,
+            "intake_waiting": True,
             "intake_questions": [{"id": "Q1", "question": "Who will use it?", "why": "scope"}],
         }
         with Store(initialized_store.db_path, read_only=False) as writable:
@@ -417,4 +418,39 @@ class TestStructuredProjectIntake:
         assert root["spec_text"] == spec_text
         assert any(a["kind"] == "spec" for a in artifacts)
         assert any(e["type"] == "project.spec_uploaded" for e in events)
+
+
+    async def test_submitted_answers_render_read_only(self, client, initialized_store):
+        pid = initialized_store.conn.execute("SELECT id FROM projects LIMIT 1").fetchone()[0]
+        settings = {
+            "intake": {"description": "x", "answers": {"Q1": "Small teams"}},
+            "intake_complete": False,
+            "intake_waiting": False,
+            "intake_questions": [{"id": "Q1", "question": "Who will use it?", "why": "scope"}],
+        }
+        with Store(initialized_store.db_path, read_only=False) as writable:
+            writable.update_project(pid, settings=settings)
+
+        response = await client.get(f"/projects/{pid}")
+        assert response.status_code == 200
+        assert "Questions and answers" in response.text
+        assert "Small teams" in response.text
+        assert 'name="q_Q1"' not in response.text
+
+    async def test_completed_intake_shows_clear_next_step(self, client, initialized_store):
+        pid = initialized_store.conn.execute("SELECT id FROM projects LIMIT 1").fetchone()[0]
+        settings = {
+            "intake": {"description": "x", "answers": {"Q1": "Small teams"}},
+            "intake_complete": True,
+            "intake_waiting": False,
+        }
+        with Store(initialized_store.db_path, read_only=False) as writable:
+            writable.update_project(pid, settings=settings)
+
+        response = await client.get(f"/projects/{pid}")
+        assert response.status_code == 200
+        assert "NEXT STEP" in response.text
+        assert "Design is ready to continue" in response.text
+        assert f'href="/projects/{pid}?phase=design"' in response.text
+
 

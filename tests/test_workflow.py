@@ -10,6 +10,7 @@ from nai.workflow import (
     filter_tree_to_phase,
     is_info_gathering,
     job_phase,
+    next_step,
     node_phase,
     phase_summary,
     project_phase_summary,
@@ -110,4 +111,26 @@ class TestInfoGathering:
 
     def test_legacy_project_without_intake_is_not_info_gathering(self):
         assert is_info_gathering({"settings": {}}) is False
+
+
+
+class TestNextStep:
+    def test_info_gathering_next_step(self):
+        step = next_step({"id": "p", "settings": {"intake": {"description": "x"}, "intake_complete": False}}, [])
+        assert step["title"] == "Finish Info Gathering"
+
+    def test_awaiting_approval_takes_priority(self):
+        step = next_step({"id": "p", "settings": {}}, [{"id": "n", "status": "awaiting_approval"}])
+        assert step["title"] == "Review pending approvals"
+        assert step["href"] == "/approvals"
+
+    def test_failed_nodes_point_to_escalations(self):
+        step = next_step({"id": "p", "settings": {}}, [{"id": "n", "status": "failed"}])
+        assert step["href"] == "/escalations"
+
+    def test_draft_after_intake_points_to_design(self):
+        project = {"id": "p", "settings": {"intake": {}, "intake_complete": True}}
+        step = next_step(project, [{"id": "root", "status": "draft"}])
+        assert step["title"] == "Design is ready to continue"
+        assert step["href"] == "/projects/p?phase=design"
 

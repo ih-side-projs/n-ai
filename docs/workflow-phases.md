@@ -61,7 +61,10 @@ shown as context) and shows an explanatory banner.
 
 While Info Gathering is active, the project page shows the original guardrails,
 the model's readiness summary, an answer form for each pending question, and a
-button to force design.
+button to force design. Submitted questions and answers are shown read-only
+until the model asks the next round. Every project page also shows a **Next
+step** panel; after intake completes it points to the Design tab or the
+appropriate approval/escalation/log view.
 
 ## Design decision
 

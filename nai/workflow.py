@@ -123,6 +123,58 @@ def project_phase_summary(nodes: Iterable[dict[str, Any]],
     return {**summary, "phase_label": label, "info_gathering": False}
 
 
+def next_step(project: dict[str, Any], nodes: Iterable[dict[str, Any]],
+              jobs: Iterable[dict[str, Any]] | None = None) -> dict[str, str]:
+    """Return the single most useful next action for the project overview."""
+    pid = str(project.get("id") or "")
+    all_nodes = list(nodes)
+    all_jobs = list(jobs or [])
+    statuses = {str(node.get("status") or "") for node in all_nodes}
+    active = [job for job in all_jobs if job.get("status") in ("queued", "running")]
+
+    if is_info_gathering(project):
+        return {
+            "title": "Finish Info Gathering",
+            "body": "Answer the model's questions below, or press “Begin design / spec-ing now” if you already have enough detail.",
+            "label": "", "href": "",
+        }
+    if "awaiting_approval" in statuses:
+        return {
+            "title": "Review pending approvals",
+            "body": "A node is waiting for a design decision. Approve it to continue, or reject it with a note to send it back for revision.",
+            "label": "Open approvals", "href": "/approvals",
+        }
+    if statuses & {"failed", "escalated", "blocked"}:
+        return {
+            "title": "Resolve blocked work",
+            "body": "Inspect the failed/escalated node, retry it, or mark it stale to trigger a fresh design pass.",
+            "label": "Open escalations", "href": "/escalations",
+        }
+    if active:
+        return {
+            "title": "Watch the current job",
+            "body": "The runner is working. Follow the live event stream for progress, tokens, and errors.",
+            "label": "Open logs", "href": f"/projects/{pid}/logs",
+        }
+    if "draft" in statuses:
+        return {
+            "title": "Design is ready to continue",
+            "body": "The refined brief is saved on the root node. Open the Design tab and review the spec tree; a new spec job will appear when the runner polls.",
+            "label": "Open Design", "href": f"/projects/{pid}?phase={DESIGN}",
+        }
+    if statuses & IMPLEMENTATION_STATUSES:
+        return {
+            "title": "Watch implementation",
+            "body": "Design is approved and implementation has started. Check jobs, artifacts, and traceability as nodes complete.",
+            "label": "Open logs", "href": f"/projects/{pid}/logs",
+        }
+    return {
+        "title": "Review the spec tree",
+        "body": "Inspect nodes, artifacts, and runner state. Use Design or Implementation tabs to focus on one part of the workflow.",
+        "label": "Open Design", "href": f"/projects/{pid}?phase={DESIGN}",
+    }
+
+
 def filter_tree_to_phase(tree: list[dict[str, Any]], phase: str,
                          per_node: dict[str, str] | None = None) -> list[dict[str, Any]]:
     """Keep nodes in `phase`, retaining ancestors so the tree stays navigable.

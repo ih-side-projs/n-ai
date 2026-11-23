@@ -30,6 +30,7 @@ from ..workflow import (
     IMPLEMENTATION,
     INFO_GATHERING,
     filter_tree_to_phase,
+    next_step,
     node_phase,
     project_phase_summary,
 )
@@ -268,6 +269,7 @@ def create_app(
             "budget": budget,
             "budget_limit_tokens": budget_limit,
             "budget_percent": budget_percent,
+            "next_step": next_step(project, nodes, jobs),
             **project_phase_summary(
                 nodes,
                 {nid: [j for j in jobs if j.get("node_id") == nid] for nid in (n["id"] for n in nodes)},

@@ -40,6 +40,8 @@ Open <http://127.0.0.1:8080>. OpenAPI docs are at `/api/docs`.
   Markdown/text spec (which seeds the root spec and skips Info Gathering). New
   projects enter Info Gathering, where the model asks questions and the owner can
   force design; forcing with answers enqueues a final refinement job first.
+  Submitted intake answers are displayed read-only, and each project page has a
+  Next step panel with a direct link to the right follow-up screen.
 - Reasoner/coder model ids are chosen from the live llama-swap model catalogue,
   with a fallback option for a configured id that is not currently listed.
 - Approve/reject node specs (records an approval, transitions status).

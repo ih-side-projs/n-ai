@@ -23,20 +23,32 @@
     <p class="muted">The model asks focused questions before specification starts. You can force design at any time.</p>
   </div></div>
   {% if project.settings.get('intake_readiness_summary') %}<p>{{ project.settings.intake_readiness_summary }}</p>{% endif %}
-  <dl class="compact-dl">
+  <dl class="compact-dl intake-fields">
     {% for key, value in intake.items() if value %}
     <div><dt>{{ key|replace('_', ' ')|capitalize }}</dt><dd>{{ value }}</dd></div>
     {% endfor %}
   </dl>
 
-  {% if project.settings.get('intake_questions') %}
+  {% set questions = project.settings.get('intake_questions') or [] %}
+  {% set answers = intake.get('answers', {}) %}
+  {% if questions and not project.settings.get('intake_waiting') %}
+  <section class="intake-history">
+    <h3>Questions and answers</h3>
+    <p class="tiny muted">Submitted. Waiting for the model's next question or its decision to start design.</p>
+    <dl class="compact-dl">
+      {% for q in questions %}
+      <div><dt>{{ q.question }}</dt><dd>{{ answers.get(q.id, '—') }}</dd></div>
+      {% endfor %}
+    </dl>
+  </section>
+  {% elif questions %}
   <form method="post" action="/projects/{{ project.id }}/intake/answers" class="intake-form">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <h3>Answer these questions</h3>
-    {% for q in project.settings.intake_questions %}
+    {% for q in questions %}
     <label><strong>{{ q.question }}</strong>
       {% if q.why %}<span class="tiny muted">{{ q.why }}</span>{% endif %}
-      <textarea name="q_{{ q.id }}" rows="3" placeholder="Your answer"></textarea>
+      <textarea name="q_{{ q.id }}" rows="3" placeholder="Your answer">{{ answers.get(q.id, '') }}</textarea>
     </label>
     {% endfor %}
     <button type="submit" class="button primary">Submit answers</button>
@@ -51,6 +63,12 @@
   </form>
 </section>
 {% endif %}
+<section class="panel next-step-panel">
+  <p class="eyebrow">NEXT STEP</p>
+  <h2>{{ project.next_step.title }}</h2>
+  <p>{{ project.next_step.body }}</p>
+  {% if project.next_step.href %}<a class="button primary" href="{{ project.next_step.href }}">{{ project.next_step.label }}</a>{% endif %}
+</section>
 {% if selected_phase == 'design' %}
 <div class="phase-banner phase-banner-design">
   <strong>Design phase</strong> — you are iterating on requirements, specifications and contracts.
