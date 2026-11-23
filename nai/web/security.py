@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import hmac
+import logging
 import os
 import secrets
 from urllib.parse import urlsplit
 
 from fastapi import HTTPException, Request
+
+logger = logging.getLogger("nai.web.security")
 
 
 def new_csrf_token() -> str:
@@ -35,12 +38,29 @@ def verify_same_origin(request: Request) -> None:
     origin = request.headers.get("origin")
     if not origin:
         return
-    if (request.headers.get("sec-fetch-site") or "").lower() == "same-origin":
+    sec_fetch_site = (request.headers.get("sec-fetch-site") or "").lower()
+    requested_with = (request.headers.get("x-requested-with") or "").lower()
+    if sec_fetch_site == "same-origin":
         return
     parsed = urlsplit(origin)
     origin_host = (parsed.hostname or "").lower()
-    if origin_host not in _configured_hosts():
-        raise HTTPException(status_code=403, detail="Cross-origin request rejected")
+    allowed = _configured_hosts()
+    if origin_host in allowed:
+        return
+    # Some privacy-focused browsers/extensions send `Origin: null` even for a
+    # same-origin form post. Accept that opaque origin only when the request was
+    # made by our own JavaScript with a custom header: a cross-origin HTML form
+    # cannot set this header, and cross-origin fetch would require CORS.
+    if origin.strip().lower() == "null" and requested_with == "fetch":
+        return
+    logger.warning(
+        "cross-origin rejected: origin=%r parsed_host=%r host=%r sec_fetch_site=%r x_requested_with=%r allowed=%s",
+        origin, origin_host, request.headers.get("host", ""), sec_fetch_site, requested_with, sorted(allowed),
+    )
+    raise HTTPException(
+        status_code=403,
+        detail=f"Cross-origin request rejected: origin host {origin_host!r} is not allowlisted",
+    )
 
 
 def verify_token(cookie_token: str | None, supplied_token: str | None) -> None:

@@ -18,7 +18,12 @@
         <form method="post" action="/models/profile" class="inline-form">
           <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
           <input type="hidden" name="name" value="{{ profile.name }}"><input type="hidden" name="role" value="reasoner">
-          <input type="text" name="model_id" value="{{ profile.reasoner.model_id|default('') }}" required>
+          {% set current = profile.reasoner.model_id|default('') %}
+          <select name="model_id" required>
+            {% if not model_ids and not current %}<option value="" disabled selected>No models available</option>{% endif %}
+            {% if current and current not in model_ids %}<option value="{{ current }}" selected>{{ current }} (not listed)</option>{% endif %}
+            {% for mid in model_ids %}<option value="{{ mid }}" {% if mid == current %}selected{% endif %}>{{ mid }}</option>{% endfor %}
+          </select>
           <button class="button secondary small">Save</button>
         </form>
       </td>
@@ -26,7 +31,12 @@
         <form method="post" action="/models/profile" class="inline-form">
           <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
           <input type="hidden" name="name" value="{{ profile.name }}"><input type="hidden" name="role" value="coder">
-          <input type="text" name="model_id" value="{{ profile.coder.model_id|default('') }}" required>
+          {% set current = profile.coder.model_id|default('') %}
+          <select name="model_id" required>
+            {% if not model_ids and not current %}<option value="" disabled selected>No models available</option>{% endif %}
+            {% if current and current not in model_ids %}<option value="{{ current }}" selected>{{ current }} (not listed)</option>{% endif %}
+            {% for mid in model_ids %}<option value="{{ mid }}" {% if mid == current %}selected{% endif %}>{{ mid }}</option>{% endfor %}
+          </select>
           <button class="button secondary small">Save</button>
         </form>
       </td>

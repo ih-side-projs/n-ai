@@ -175,6 +175,18 @@ def test_model_server_unconfigured_is_nonfatal():
     assert snapshot["models"] == []
 
 
+def test_model_server_url_normalizes_openai_base_and_llama_swap_roots():
+    client = ModelServerClient("http://127.0.0.1:8080/v1")
+    assert client._url_for("/health") == "http://127.0.0.1:8080/health"
+    assert client._url_for("/running") == "http://127.0.0.1:8080/running"
+    assert client._url_for("/v1/models") == "http://127.0.0.1:8080/v1/models"
+    assert client._url_for("/v1/chat/completions") == "http://127.0.0.1:8080/v1/chat/completions"
+
+    root_client = ModelServerClient("http://127.0.0.1:8080/")
+    assert root_client._url_for("/health") == "http://127.0.0.1:8080/health"
+    assert root_client._url_for("/v1/models") == "http://127.0.0.1:8080/v1/models"
+
+
 def test_missing_database_returns_actionable_503(tmp_path):
     client = TestClient(create_app(tmp_path / "missing.sqlite3"))
     response = client.get("/api/projects")
@@ -182,7 +194,8 @@ def test_missing_database_returns_actionable_503(tmp_path):
     assert "database not found" in response.json()["detail"]
 
 
-def test_model_page_uses_local_server_models_running_and_smoke_test(web_db):
+@pytest.mark.parametrize("base_suffix", ["", "/v1"])
+def test_model_page_uses_local_server_models_running_and_smoke_test(web_db, base_suffix):
     import threading
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -225,11 +238,13 @@ def test_model_page_uses_local_server_models_running_and_smoke_test(web_db):
         with Store(db) as store:
             store.save_model_profile("local-qwen", {"model_id": "model-test", "ctx": 32768, "max_tokens": 2048},
                                      {"model_id": "model-test-coder", "ctx": 32768, "max_tokens": 2048})
-        base_url = f"http://127.0.0.1:{server.server_port}"
+        base_url = f"http://127.0.0.1:{server.server_port}{base_suffix}"
         client = TestClient(create_app(db, llama_swap_url=base_url))
         page = client.get("/models")
         assert page.status_code == 200
         assert "model-test" in page.text
+        assert '<select name="model_id" required>' in page.text
+        assert '<option value="model-test"' in page.text
         snapshot = client.get("/api/models").json()["server"]
         assert snapshot["healthy"] is True
         assert snapshot["loaded_models"][0]["id"] == "model-test"

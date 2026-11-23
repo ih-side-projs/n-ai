@@ -27,6 +27,7 @@ open:
 - `0003_extend_job_kinds.sql` — adds spec-pipeline job kinds.
 - `0004_project_lifecycle.sql` — adds `cancelled` project status (rebuilds the
   `projects` table with FK enforcement temporarily disabled so child rows survive).
+- `0005_add_intake_job.sql` — adds the `intake` job kind for structured project intake.
 
 `schema_migrations` records applied versions. `Store.backup_now()`,
 `backup_if_due()` and `backup_keep` provide UTC-daily snapshots.

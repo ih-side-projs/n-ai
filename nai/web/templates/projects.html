@@ -3,16 +3,11 @@
 {% block content %}
 <div class="page-heading">
   <div><p class="eyebrow">WORKSPACE</p><h1>Projects</h1><p class="muted">Project state, build progress and recent activity.</p></div>
-  <form method="post" action="/projects/create" class="inline-form">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    <input type="text" name="name" placeholder="Project name" required>
-    <input type="text" name="brief" placeholder="Brief description">
-    <button type="submit" class="button primary">＋ New project</button>
-  </form>
+  <button type="button" class="button primary" data-open-dialog="new-project-dialog">＋ New project</button>
 </div>
 <div class="filter-bar">
-  <a class="button ghost small" href="/projects" {% if not show_archived %}aria-current="page"{% endif %}Active projects</a>
-  <a class="button ghost small" href="/projects?show_archived=1" {% if show_archived %}aria-current="page"{% endif %}>
+  <a class="button ghost small" href="/projects?show_archived=0" {% if not show_archived %}aria-current="page"{% endif %}Active projects</a>
+  <a class="button ghost small" href="{% if show_archived %}/projects?show_archived=0{% else %}/projects?show_archived=1{% endif %}" {% if show_archived %}aria-current="page"{% endif %}>
     {% if show_archived %}Hide archived{% else %}Show archived ({{ archived_count }}){% endif %}
   </a>
 </div>
@@ -65,4 +60,74 @@
 {% else %}
   <section class="empty-state panel"><div class="empty-icon">◫</div><h2>No projects yet</h2><p>Create a project to get started.</p></section>
 {% endif %}
+
+<dialog id="new-project-dialog" class="modal-dialog" aria-labelledby="new-project-title">
+  <form method="post" action="/projects/create" class="modal-form" enctype="multipart/form-data">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <div class="modal-heading">
+      <div><p class="eyebrow">PROJECT INTAKE</p><h2 id="new-project-title">New project</h2></div>
+      <button type="button" class="button ghost small" data-close-dialog>✕</button>
+    </div>
+    <p class="muted tiny">Blank options are left out of the model's brief. After creation, the model asks focused questions before design starts.</p>
+
+    <label>Project name
+      <input type="text" name="name" placeholder="e.g. Task Tracker" required maxlength="200">
+    </label>
+    <label>Project description
+      <textarea name="brief" rows="8" class="spec-textarea wide-textarea" placeholder="Describe what you want to build, why, and what success looks like."></textarea>
+    </label>
+    <label>Start from an existing spec (optional)
+      <input type="file" name="spec_file" accept=".md,.txt,text/markdown,text/plain">
+      <span class="tiny muted">Markdown or text, up to 2 MB. Uploading skips Info Gathering and seeds the root spec.</span>
+    </label>
+
+    <div class="content-grid">
+      <label>Programming language
+        <input type="text" name="language" placeholder="Python 3.12, TypeScript, Rust…">
+      </label>
+      <label>Interface type
+        <select name="interface_type">
+          <option value="">Unspecified</option>
+          <option value="CLI">CLI</option>
+          <option value="Web application">Web application</option>
+          <option value="Windowed desktop application">Windowed desktop application</option>
+          <option value="Fullscreen application">Fullscreen application</option>
+          <option value="Library / API">Library / API</option>
+          <option value="Service / daemon">Service / daemon</option>
+          <option value="Other">Other</option>
+        </select>
+      </label>
+    </div>
+
+    <details class="guardrail-details">
+      <summary>Optional guardrails</summary>
+      <label>Target users
+        <textarea name="target_users" rows="2" placeholder="Who will use this?"></textarea>
+      </label>
+      <label>Core workflows
+        <textarea name="core_workflows" rows="3" placeholder="List the main things a user must be able to do."></textarea>
+      </label>
+      <label>Non-goals / constraints
+        <textarea name="non_goals" rows="2" placeholder="What should it not do? What constraints matter?"></textarea>
+      </label>
+      <label>Runtime / deployment
+        <textarea name="runtime_deployment" rows="2" placeholder="Local, LAN, cloud, offline, container…"></textarea>
+      </label>
+      <label>Preferred stack / libraries
+        <textarea name="stack_libraries" rows="2" placeholder="Frameworks or libraries you want or want to avoid."></textarea>
+      </label>
+      <label>Accessibility / security needs
+        <textarea name="accessibility_security" rows="2" placeholder="Accessibility target, auth, privacy, data handling…"></textarea>
+      </label>
+      <label>Testing expectations
+        <textarea name="testing_expectations" rows="2" placeholder="Unit, integration, browser, performance, coverage…"></textarea>
+      </label>
+    </details>
+
+    <div class="form-actions">
+      <button type="button" class="button secondary" data-close-dialog>Cancel</button>
+      <button type="submit" class="button primary">Create and gather info</button>
+    </div>
+  </form>
+</dialog>
 {% endblock %}

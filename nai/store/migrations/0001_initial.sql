@@ -86,7 +86,7 @@ CREATE TABLE jobs (
     id TEXT PRIMARY KEY,
     project_id TEXT NOT NULL,
     node_id TEXT,
-    kind TEXT NOT NULL CHECK (kind IN ('decompose', 'interfaces', 'check_interfaces', 'component_spec',
+    kind TEXT NOT NULL CHECK (kind IN ('intake', 'decompose', 'interfaces', 'check_interfaces', 'component_spec',
         'reconcile', 'contract_stub', 'author_tests', 'implement', 'verify', 'integrate', 'diagnose', 'review')),
     model_role TEXT NOT NULL CHECK (model_role IN ('reasoner', 'coder')),
     status TEXT NOT NULL DEFAULT 'queued'

@@ -6,6 +6,8 @@ Actions (spaces, dashes and case are ignored, so "cancel job" == "cancel_job"):
   cancel_job        payload {"job_id": ...}, or the command's node_id (cancels every active job of the node)
   cancel            cancel all active jobs and mark the project cancelled (or cancel one node's jobs)
   archive/unarchive move the project to archived/active (owner hides test projects from the default list)
+  answer_intake     payload {"answers": {"Q1": "...", ...}}: owner answers Info Gathering questions
+  begin_design      force the project out of Info Gathering into the spec pipeline
   retry_node        node_id: failed | escalated | stale -> ready, with a fresh budget
   rerun_stage       node_id, payload {"stage": "spec"|"build"|"test"|"verify"}: enqueue that job again
   reorder           payload {"order": [node_id, ...]}: persist the owner's priority order
@@ -97,6 +99,71 @@ class CommandProcessor:
         self.r.store.set_project_status(pid, "active")
         self.r.store.record_event(pid, "project.unarchived", "Project restored to active by owner")
         self.r.mark_dirty()
+
+    def _update_settings(self, pid, mutate):
+        project = self.r.store.get_project(pid)
+        if project is None:
+            return f"project {pid} not found"
+        settings = dict(project.get("settings") or {})
+        mutate(settings)
+        self.r.store.update_project(pid, settings=settings)
+        self.r.mark_dirty()
+        return None
+
+    def _answer_intake(self, pid, nid, payload):
+        answers = as_obj(payload.get("answers"), {}) or {}
+        if not answers:
+            return "answer_intake needs payload.answers"
+
+        def mutate(settings):
+            intake = dict(settings.get("intake") or {})
+            saved = dict(intake.get("answers") or {})
+            saved.update({str(k): str(v).strip() for k, v in answers.items() if str(v).strip()})
+            intake["answers"] = saved
+            settings["intake"] = intake
+            settings["intake_waiting"] = False
+
+        error = self._update_settings(pid, mutate)
+        if error:
+            return error
+        self.r.store.record_event(pid, "project.intake_answers", "Owner answered Info Gathering questions",
+                                  data={"question_ids": sorted(answers)})
+
+    def _begin_design(self, pid, nid, payload):
+        project = self.r.store.get_project(pid)
+        if project is None:
+            return f"project {pid} not found"
+        settings_before = dict(project.get("settings") or {})
+        intake = dict(settings_before.get("intake") or {})
+        answers = {str(k): str(v).strip() for k, v in (intake.get("answers") or {}).items() if str(v).strip()}
+
+        def mutate(settings):
+            settings["intake_complete"] = True
+            settings["intake_waiting"] = False
+            settings["intake_forced"] = True
+            settings["clarified"] = True
+
+        error = self._update_settings(pid, mutate)
+        if error:
+            return error
+        self.r.store.record_event(pid, "project.design_forced", "Owner started design/spec-ing",
+                                  data={"force_refine": bool(answers)})
+        if not answers:
+            return None
+
+        # The owner answered questions, so make the intake model fold those
+        # answers into the root brief before any design job runs.
+        roots = self.r.store.list_nodes(pid, parent_id=None) or []
+        if not roots:
+            return None
+        active = [j for status in ("queued", "running")
+                  for j in self.r.store.list_jobs(pid, status=status, limit=5000)
+                  if j.get("kind") == "intake"]
+        if not active:
+            self.r.store.create_job(
+                pid, "intake", "reasoner", node_id=roots[0]["id"],
+                input_ref={"force_refine": True, "force_design": True},
+            )
 
     def _rerun_stage(self, pid, nid, payload):
         stage = str(payload.get("stage") or "")

@@ -59,6 +59,14 @@ class FakeStore:
     def set_project_status(self, project_id, status):
         self.projects[project_id]["status"] = status
 
+    def update_project(self, project_id, *, settings=None, **changes):
+        if project_id not in self.projects:
+            raise KeyError(f"unknown project: {project_id}")
+        if settings is not None:
+            self.projects[project_id]["settings"] = dict(settings)
+        for key, value in changes.items():
+            self.projects[project_id][key] = value
+
     # -- nodes -----------------------------------------------------------------------------------------
     def create_node(self, project_id, name, kind, *, parent_id=None, objective="", spec_text="", contract=None, depends_on=(),
                     test_command=None):

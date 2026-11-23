@@ -204,7 +204,45 @@ CLARIFY_SCHEMA = {
                 "category": {"type": "string", "enum": ["language", "dependencies", "scope", "interfaces", "nonfunctional", "other"]}
             }}}}
 }
+INTAKE_SCHEMA = {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "IntakeOutput",
+    "type": "object",
+    "required": ["ready_for_design", "questions", "readiness_summary", "refined_brief", "guardrails"],
+    "additionalProperties": False,
+    "properties": {
+        "ready_for_design": {"type": "boolean"},
+        "questions": {
+            "type": "array", "maxItems": 5, "items": {
+                "type": "object", "required": ["id", "question", "why"], "additionalProperties": False,
+                "properties": {
+                    "id": {"type": "string", "pattern": "^Q[0-9]+$"},
+                    "question": {"type": "string", "minLength": 10},
+                    "why": {"type": "string", "minLength": 5},
+                },
+            },
+        },
+        "readiness_summary": {"type": "string", "minLength": 10},
+        "refined_brief": {"type": "string", "minLength": 20},
+        "guardrails": {
+            "type": "object", "additionalProperties": False,
+            "properties": {
+                "language": {"type": "string"},
+                "interface_type": {"type": "string"},
+                "target_users": {"type": "string"},
+                "core_workflows": {"type": "string"},
+                "non_goals": {"type": "string"},
+                "runtime_deployment": {"type": "string"},
+                "stack_libraries": {"type": "string"},
+                "accessibility_security": {"type": "string"},
+                "testing_expectations": {"type": "string"},
+            },
+        },
+    },
+}
+
 SCHEMAS = {
+    "intake": INTAKE_SCHEMA,
     "decompose": DECOMPOSE_SCHEMA,
     "select_map": SELECT_MAP_SCHEMA,
     "interfaces": INTERFACES_SCHEMA,

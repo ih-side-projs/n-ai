@@ -8,7 +8,7 @@ import time
 import urllib.error
 import urllib.request
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 
 
 class ModelServerError(RuntimeError):
@@ -31,6 +31,29 @@ class ModelServerClient:
                 raise ValueError("model server URL must not include a query string or fragment")
         self.api_key = api_key
         self.timeout = timeout
+        self.root_url = ""
+        self.api_base_url = ""
+        if self.base_url:
+            # LLAMA_SWAP_URL/NAI_LLAMA_SWAP_URL is the OpenAI-compatible base URL
+            # and commonly ends in /v1. llama-swap's health and /running endpoints
+            # are on the server root, so keep both roots explicitly.
+            path = parsed.path.rstrip("/")
+            if path.endswith("/v1"):
+                root_path = path[:-3].rstrip("/")
+                api_path = path
+            else:
+                root_path = path
+                api_path = f"{path}/v1" if path else "/v1"
+            self.root_url = urlunsplit((parsed.scheme, parsed.netloc, root_path, "", ""))
+            self.api_base_url = urlunsplit((parsed.scheme, parsed.netloc, api_path, "", ""))
+
+    def _url_for(self, path: str) -> str:
+        """Resolve an endpoint path against the correct root or OpenAI base."""
+        if path == "/v1" or path.startswith("/v1/"):
+            return self.api_base_url + path[3:] if path != "/v1" else self.api_base_url
+        if path == "/health" or path.startswith("/health/") or path == "/running" or path.startswith("/running/"):
+            return self.root_url + path
+        return self.base_url + path
 
     @property
     def configured(self) -> bool:
@@ -47,7 +70,7 @@ class ModelServerClient:
         if body is not None:
             data = json.dumps(body).encode("utf-8")
             headers["Content-Type"] = "application/json"
-        request = urllib.request.Request(self.base_url + path, data=data, headers=headers, method=method)
+        request = urllib.request.Request(self._url_for(path), data=data, headers=headers, method=method)
         started = time.monotonic()
         try:
             with urllib.request.urlopen(request, timeout=timeout or self.timeout) as response:

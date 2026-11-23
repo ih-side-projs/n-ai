@@ -65,7 +65,7 @@ All persistent entities live in SQLite (SS-STORE). Ids are short unique strings.
 - **Requirement**: `id` (for example `R3`, `E2`), `node_id`, `text`, `testable` (bool). Parsed from spec text using the headings and id format `- R1:` and `- E1:` under each component, matching the v1 and decomposable-spec conventions.
 - **TestRecord**: `node_id`, `requirement_ids`, `file_path`, `frozen_hash`, `last_result` (`pass`, `fail`, `error`, `none`), `last_run_at`.
 - **Job**: `id`, `project_id`, `node_id`, `kind`, `model_role` (`reasoner` or `coder`), `status` (`queued`, `running`, `succeeded`, `failed`, `cancelled`), `attempt`, `input_ref` (JSON: what was given), `result_ref` (JSON), `tokens_in`, `tokens_out`, `started_at`, `ended_at`, `error`.
-- **Job kinds**: `decompose`, `interfaces`, `check_interfaces`, `component_spec`, `reconcile`, `contract_stub`, `author_tests`, `implement`, `verify`, `integrate`, `diagnose`, `review`.
+- **Job kinds**: `intake`, `decompose`, `interfaces`, `check_interfaces`, `component_spec`, `reconcile`, `contract_stub`, `author_tests`, `implement`, `verify`, `integrate`, `diagnose`, `review`.
 - **Event**: append-only log row: `id`, `project_id`, `node_id` (nullable), `job_id` (nullable), `time`, `level`, `type`, `message`, `data` (JSON). Everything the UI shows as history comes from events.
 - **Artifact**: `id`, `project_id`, `node_id`, `kind` (`spec`, `contract`, `code`, `test`, `output-file`, `report`, `log`), `path`, `sha1`, `created_at`.
 - **Approval**: `id`, `node_id`, `stage` (`component-map`, `interfaces`, `component-spec`, `escalation`), `decision` (`approved`, `rejected`, `edited`), `note`, `time`.
@@ -213,19 +213,19 @@ Purpose: a collection of Python tools the models can call, defined once and serv
 
 Stack (default, see D1): FastAPI, server-rendered templates, HTMX and server-sent events, minimal JavaScript. Bound to 127.0.0.1 by default; optional bearer token for LAN use.
 
-- WEB-1. **Project list:** name, status, node counts by status, percent done, last activity, current job, and a start button for new projects (paste brief or upload spec).
+- WEB-1. **Project list:** name, status, node counts by status, percent done, last activity, current job, and a New Project dialog. The dialog collects name, a large description, language, interface type and optional product/engineering guardrails; blank options are omitted from the model's brief. A project starts in the `info_gathering` phase: the `intake` job asks focused product-manager questions, stores the answers, and decides when to begin design. The owner may force design at any time; if answers already exist, a forced `intake` job first folds them into a refined brief for the root node. Uploading an existing Markdown/text spec seeds the root spec directly, stores it as a `spec` artifact, and skips `info_gathering`.
 - WEB-2. **Project page:** a spec tree (collapsible, status colour per node, counts per subtree), a header with progress, budget use, and the runner state.
 - WEB-3. **Node page:** spec text (editable, with diff against the last approved version), contract view, requirements with their tests and last results (traceability matrix), jobs and attempts, artifacts, and buttons: approve, reject with note, retry, re-run stage, mark stale.
 - WEB-4. **Approvals inbox:** all pending gates across projects, each showing exactly what to review (component map, interface table with scenario walk-through, specs) and the mechanical check findings.
 - WEB-5. **Live log:** per project and per job, streaming via SSE: model thinking summaries (hidden by default), tool calls, command output, verification results.
 - WEB-6. **Metrics page:** tokens and wall time per project, node and model; model swap count and time; success rate and retries per node kind; trend over time.
 - WEB-7. **Tools page:** the registry catalog with schemas, family, last test result, and a try-it form that calls a tool with sample arguments in the sandbox.
-- WEB-8. **Models page:** configured ModelProfiles, the server's `/v1/models` list, which model is loaded, health, and a button to run a quick smoke test and a latency probe.
+- WEB-8. **Models page:** configured ModelProfiles, the server's `/v1/models` list, which model is loaded, health, and a button to run a quick smoke test and a latency probe. Reasoner/coder model ids are selected from the known model catalogue, with a fallback option for a configured id not currently listed.
 - WEB-9. **Artifacts browser:** project files, outputs and logs with download, plus a markdown and code viewer.
 - WEB-10. **Controls:** pause, resume, cancel, archive, restore, and priority reordering, implemented through the commands table (STO-3). A project-wide cancel moves the project to `cancelled`; archived projects are hidden from the default Projects page and available through a "Show archived" toggle.
 - WEB-11. **Escalation inbox** per ESC-1 to ESC-4.
 - WEB-12. **Settings:** model profiles, size limits, test commands, scheduling window, backup location.
-- WEB-13. All state-changing actions are POST requests with CSRF protection; no endpoint executes arbitrary shell input from the browser.
+- WEB-13. All state-changing actions are POST requests with CSRF protection; no endpoint executes arbitrary shell input from the browser. Same-origin POSTs are recognised by `Sec-Fetch-Site`, an exact configured `Origin` host, or the dashboard's `X-Requested-With: fetch` header for browsers/extensions that emit an opaque `Origin: null`.
 - WEB-14. The UI works at laptop width and on a phone; accessible colour contrast; no external CDN assets (everything is served locally).
 - WEB-15. A JSON API mirrors every page's data (`/api/...`) so scripts and other tools can read project state.
 

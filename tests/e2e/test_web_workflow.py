@@ -47,13 +47,18 @@ async def _csrf(client: AsyncClient) -> str:
     return token
 
 
-async def _create_project(client: AsyncClient, name: str = "Web E2E") -> tuple[str, str]:
+async def _create_project(client: AsyncClient, db_path: Path, name: str = "Web E2E") -> tuple[str, str]:
     token = await _csrf(client)
     response = await client.post("/projects/create", data={
         "csrf_token": token, "name": name, "brief": "Build a tiny verified thing",
     }, follow_redirects=False)
     assert response.status_code == 303, response.text
     pid = response.headers["location"].rsplit("/", 1)[-1]
+    # These tests focus on later workflow screens; skip the new Info Gathering
+    # phase through the same command the real UI uses.
+    with Store(db_path, read_only=True) as store:
+        store.enqueue_command(pid, "begin_design")
+    _process_commands(db_path, db_path.parent)
     return pid, token
 
 
@@ -93,7 +98,7 @@ def _snapshot(db_path: Path, pid: str) -> dict:
 
 
 async def test_web_command_queue_full_control_flow(client: AsyncClient, db_path: Path, tmp_path: Path):
-    pid, token = await _create_project(client)
+    pid, token = await _create_project(client, db_path)
     with Store(db_path, read_only=False) as store:
         root = store.list_nodes(pid, parent_id=None)[0]["id"]
 
@@ -200,7 +205,7 @@ async def test_web_command_queue_full_control_flow(client: AsyncClient, db_path:
 
 async def test_web_project_lifecycle_cancel_archive_and_filter(client: AsyncClient, db_path: Path, tmp_path: Path):
     """Cancel leaves Active; archived projects hide until the owner asks for them."""
-    pid, token = await _create_project(client, "Visible Project")
+    pid, token = await _create_project(client, db_path, "Visible Project")
 
     with Store(db_path, read_only=False) as store:
         hidden = store.create_project("Hidden Test", "old test project", settings={})
@@ -216,6 +221,12 @@ async def test_web_project_lifecycle_cancel_archive_and_filter(client: AsyncClie
     response = await client.get("/projects?show_archived=1")
     assert "Hidden Test" in response.text
     assert "Hide archived" in response.text
+    assert 'href="/projects?show_archived=0"' in response.text
+    assert response.headers.get("cache-control") == "no-store"
+
+    response = await client.get("/projects?show_archived=0")
+    assert "Hidden Test" not in response.text
+    assert "Show archived (1)" in response.text
 
     # Archive enqueues a command; the project status changes when the runner processes it.
     response = await client.post(f"/projects/{pid}/archive", data={
@@ -260,7 +271,7 @@ async def test_web_project_lifecycle_cancel_archive_and_filter(client: AsyncClie
 
 async def test_web_pages_json_api_and_tool_execution(client: AsyncClient, db_path: Path, tmp_path: Path):
     """Every major screen renders, its JSON mirror responds, and tools execute in a project workspace."""
-    pid, token = await _create_project(client, "Web Pages E2E")
+    pid, token = await _create_project(client, db_path, "Web Pages E2E")
     with Store(db_path, read_only=False) as store:
         root = store.list_nodes(pid, parent_id=None)[0]["id"]
         workspace = Path(store.get_project(pid)["workspace_path"])

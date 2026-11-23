@@ -8,6 +8,7 @@ from .jobs import (
     handle_clarify,
     handle_component_spec,
     handle_decompose,
+    handle_intake,
     handle_interfaces,
     handle_lint,
     handle_reconcile,
@@ -19,6 +20,7 @@ MAX_REPAIR_ROUNDS = 3
 
 
 def register(runner: Any) -> None:
+    runner.registry.register("intake", handle_intake, uses_model=True)
     runner.registry.register("decompose", handle_decompose, uses_model=True)
     runner.registry.register("select_map", handle_select_map, uses_model=True)
     runner.registry.register("interfaces", handle_interfaces, uses_model=True)
@@ -39,6 +41,15 @@ def plan(pc: Any) -> None:
     project = pc.project
     pid = project["id"]
     settings = project.get("settings") or {}
+
+    # Structured intake is a project-level gate. No spec jobs are planned until
+    # the owner (or the model, once it has enough information) ends this phase.
+    roots = [n for n in pc.nodes if n.get("parent_id") is None]
+    if settings.get("intake") is not None and not settings.get("intake_complete"):
+        if roots and not settings.get("intake_waiting"):
+            if not any(j.get("kind") == "intake" for j in pc.jobs):
+                pc.store.create_job(pid, "intake", "reasoner", node_id=roots[0]["id"])
+        return
 
     for node in pc.nodes:
         nid = node["id"]

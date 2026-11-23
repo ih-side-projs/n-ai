@@ -1,8 +1,8 @@
-"""Named workflow phases derived from existing state (no schema change).
+"""Named workflow phases derived from existing state.
 
-Two phases exist: ``design`` (generating and approving the spec) and
-``implementation`` (coding, testing, integration). They may overlap at the
-project level: different nodes can be in different phases at the same time.
+``info_gathering`` is the first, project-level phase for structured intake;
+``design`` generates and approves the spec; ``implementation`` codes, tests and
+integrates. Design and implementation may overlap at the project level.
 """
 from __future__ import annotations
 
@@ -10,12 +10,13 @@ from collections import Counter
 from collections.abc import Iterable
 from typing import Any
 
+INFO_GATHERING = "info_gathering"
 DESIGN = "design"
 IMPLEMENTATION = "implementation"
 
 # Job kinds belonging to each phase (matches the spec pipeline / build pipeline).
 DESIGN_JOBS = frozenset({
-    "clarify", "decompose", "select_map", "interfaces", "check_interfaces",
+    "intake", "clarify", "decompose", "select_map", "interfaces", "check_interfaces",
     "component_spec", "lint", "reconcile",
 })
 IMPLEMENTATION_JOBS = frozenset({
@@ -100,6 +101,25 @@ def phase_summary(nodes: Iterable[dict[str, Any]], jobs_by_node: dict[str, list[
         "total": total,
         "per_node": per_node,
     }
+
+
+def is_info_gathering(project: dict[str, Any] | None) -> bool:
+    """True while a structured-intake project has not entered design yet."""
+    settings = (project or {}).get("settings") or {}
+    return bool(settings.get("intake")) and not bool(settings.get("intake_complete"))
+
+
+def project_phase_summary(nodes: Iterable[dict[str, Any]],
+                          jobs_by_node: dict[str, list[dict[str, Any]]] | None,
+                          project: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Project phase summary including the project-level Info Gathering phase."""
+    summary = phase_summary(nodes, jobs_by_node)
+    if is_info_gathering(project):
+        return {**summary, "phase": INFO_GATHERING, "phase_label": "Info Gathering", "info_gathering": True}
+    label = "Design" if summary["phase"] == DESIGN else (
+        "Implementation" if summary["phase"] == IMPLEMENTATION else summary["phase"].capitalize()
+    )
+    return {**summary, "phase_label": label, "info_gathering": False}
 
 
 def filter_tree_to_phase(tree: list[dict[str, Any]], phase: str,

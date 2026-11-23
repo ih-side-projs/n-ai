@@ -6,10 +6,13 @@ import pytest
 from nai.workflow import (
     DESIGN,
     IMPLEMENTATION,
+    INFO_GATHERING,
     filter_tree_to_phase,
+    is_info_gathering,
     job_phase,
     node_phase,
     phase_summary,
+    project_phase_summary,
 )
 
 
@@ -87,3 +90,24 @@ class TestFilterTree:
         assert [n["id"] for n in impl[0]["children"]] == ["b"]
         assert impl[0]["phase_context"] is True
         assert "phase" in design[0]
+
+
+class TestInfoGathering:
+    def test_structured_project_starts_in_info_gathering(self):
+        project = {"settings": {"intake": {"description": "x"}, "intake_complete": False}}
+        nodes = [{"id": "root", "status": "draft"}]
+        summary = project_phase_summary(nodes, {}, project)
+        assert summary["phase"] == INFO_GATHERING
+        assert summary["phase_label"] == "Info Gathering"
+        assert is_info_gathering(project) is True
+
+    def test_complete_intake_falls_back_to_node_phase(self):
+        project = {"settings": {"intake": {"description": "x"}, "intake_complete": True}}
+        summary = project_phase_summary([{"id": "root", "status": "draft"}], {}, project)
+        assert summary["phase"] == DESIGN
+        assert summary["phase_label"] == "Design"
+        assert is_info_gathering(project) is False
+
+    def test_legacy_project_without_intake_is_not_info_gathering(self):
+        assert is_info_gathering({"settings": {}}) is False
+

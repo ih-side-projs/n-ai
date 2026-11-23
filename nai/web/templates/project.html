@@ -9,10 +9,48 @@
   <span class="status status-{{ project.status }}">{{ project.status }}</span>
 </div>
 <nav class="phase-tabs" aria-label="Workflow phase">
+  {% if project.info_gathering %}
+  <a href="/projects/{{ project.id }}?phase=info_gathering" class="phase-tab {% if selected_phase == 'info_gathering' %}active{% endif %}">Info Gathering</a>
+  {% endif %}
   <a href="/projects/{{ project.id }}?phase=all" class="phase-tab {% if selected_phase == 'all' %}active{% endif %}">All <span class="count-pill">{{ project.total }}</span></a>
   <a href="/projects/{{ project.id }}?phase=design" class="phase-tab {% if selected_phase == 'design' %}active{% endif %}">Design <span class="count-pill">{{ project.design_count }}</span></a>
   <a href="/projects/{{ project.id }}?phase=implementation" class="phase-tab {% if selected_phase == 'implementation' %}active{% endif %}">Implementation <span class="count-pill">{{ project.implementation_count }}</span></a>
 </nav>
+{% if project.info_gathering %}
+<section class="panel info-gathering-panel">
+  {% set intake = project.settings.get('intake', {}) %}
+  <div class="section-heading"><div><h2>Info Gathering</h2>
+    <p class="muted">The model asks focused questions before specification starts. You can force design at any time.</p>
+  </div></div>
+  {% if project.settings.get('intake_readiness_summary') %}<p>{{ project.settings.intake_readiness_summary }}</p>{% endif %}
+  <dl class="compact-dl">
+    {% for key, value in intake.items() if value %}
+    <div><dt>{{ key|replace('_', ' ')|capitalize }}</dt><dd>{{ value }}</dd></div>
+    {% endfor %}
+  </dl>
+
+  {% if project.settings.get('intake_questions') %}
+  <form method="post" action="/projects/{{ project.id }}/intake/answers" class="intake-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <h3>Answer these questions</h3>
+    {% for q in project.settings.intake_questions %}
+    <label><strong>{{ q.question }}</strong>
+      {% if q.why %}<span class="tiny muted">{{ q.why }}</span>{% endif %}
+      <textarea name="q_{{ q.id }}" rows="3" placeholder="Your answer"></textarea>
+    </label>
+    {% endfor %}
+    <button type="submit" class="button primary">Submit answers</button>
+  </form>
+  {% else %}
+  <p class="muted">Waiting for the model's first set of questions. Refresh in a moment.</p>
+  {% endif %}
+
+  <form method="post" action="/projects/{{ project.id }}/intake/begin" class="inline-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <button type="submit" class="button secondary">Begin design / spec-ing now</button>
+  </form>
+</section>
+{% endif %}
 {% if selected_phase == 'design' %}
 <div class="phase-banner phase-banner-design">
   <strong>Design phase</strong> — you are iterating on requirements, specifications and contracts.

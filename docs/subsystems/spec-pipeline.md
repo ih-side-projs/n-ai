@@ -7,6 +7,7 @@ code is written. It registers job handlers as scheduler plugins.
 
 | # | Job | Purpose |
 |---|-----|---------|
+| -1 | `intake` | Product-manager questions and refined brief before design (WEB-1) |
 | 1 | `decompose` | Component map (children, shared entities, external I/O) |
 | 2 | `select_map` | Optional candidate selection/merge (D2: 3 at root, 1 elsewhere) |
 | 3 | `interfaces` | Contract: entities, components, scenarios |

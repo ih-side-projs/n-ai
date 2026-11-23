@@ -7,13 +7,15 @@ from pathlib import Path
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+from nai.store import Store
 from nai.web import create_app
 
 
 @pytest.fixture
-def web_app(initialized_store, monkeypatch):
+def web_app(initialized_store, monkeypatch, tmp_path):
     db = initialized_store.conn.execute("PRAGMA database_list").fetchone()[2]
     monkeypatch.setenv("NAI_DB_PATH", db)
+    monkeypatch.setenv("NAI_STATE_DIR", str(tmp_path / "no-service"))
     monkeypatch.delenv("NAI_WEB_TOKEN", raising=False)
     return create_app(db)
 
@@ -260,6 +262,14 @@ class TestCommandQueueRouting:
 
 
 class TestSameOriginLocal:
+    async def test_auth_page_loads_fetch_shim(self, initialized_store):
+        db = initialized_store.conn.execute("PRAGMA database_list").fetchone()[2]
+        app = create_app(db, bearer_token="test-token")
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://testserver") as c:
+            r = await c.get("/auth")
+        assert r.status_code == 200
+        assert 'src="/static/app.js"' in r.text
+
     async def test_localhost_to_127_origin_accepted(self, client, initialized_store):
         token = await _csrf(client)
         r = await client.post('/models/profile', data={
@@ -273,6 +283,28 @@ class TestSameOriginLocal:
             'csrf_token': token, 'name':'default', 'role':'reasoner', 'model_id':'x'
         }, headers={'origin': 'https://evil.example.com'}, follow_redirects=False)
         assert r.status_code == 403
+        assert "evil.example.com" in r.json()["detail"]
+
+    async def test_null_origin_with_ajax_header_accepted(self, client, initialized_store):
+        token = await _csrf(client)
+        r = await client.post('/models/profile', data={
+            'csrf_token': token, 'name': 'default', 'role': 'reasoner', 'model_id': 'opaque-origin'
+        }, headers={'origin': 'null', 'x-requested-with': 'fetch'}, follow_redirects=False)
+        assert r.status_code == 303
+
+    async def test_null_origin_without_ajax_header_rejected(self, client, initialized_store):
+        token = await _csrf(client)
+        r = await client.post('/models/profile', data={
+            'csrf_token': token, 'name': 'default', 'role': 'reasoner', 'model_id': 'opaque-origin'
+        }, headers={'origin': 'null'}, follow_redirects=False)
+        assert r.status_code == 403
+
+    async def test_external_origin_with_ajax_header_still_rejected(self, client, initialized_store):
+        token = await _csrf(client)
+        r = await client.post('/models/profile', data={
+            'csrf_token': token, 'name': 'default', 'role': 'reasoner', 'model_id': 'x'
+        }, headers={'origin': 'https://evil.example.com', 'x-requested-with': 'fetch'}, follow_redirects=False)
+        assert r.status_code == 403
 
     async def test_sec_fetch_same_origin_accepted(self, client, initialized_store):
         token = await _csrf(client)
@@ -280,3 +312,109 @@ class TestSameOriginLocal:
             'csrf_token': token, 'name':'default', 'role':'coder', 'model_id':'local-c'
         }, headers={'origin': 'https://anything.example', 'sec-fetch-site': 'same-origin'}, follow_redirects=False)
         assert r.status_code == 303
+
+
+class TestStructuredProjectIntake:
+    async def test_new_project_dialog_has_large_brief_and_guardrails(self, client):
+        response = await client.get("/")
+        assert response.status_code == 200
+        assert 'id="new-project-dialog"' in response.text
+        assert 'data-open-dialog="new-project-dialog"' in response.text
+        for field in (
+            "brief", "language", "interface_type", "target_users", "core_workflows",
+            "non_goals", "runtime_deployment", "stack_libraries",
+            "accessibility_security", "testing_expectations",
+        ):
+            assert f'name="{field}"' in response.text
+        assert 'name="spec_file"' in response.text
+        assert 'enctype="multipart/form-data"' in response.text
+        assert 'rows="8"' in response.text
+
+    async def test_create_project_persists_intake_guardrails(self, client, initialized_store):
+        token = await _csrf(client)
+        response = await client.post("/projects/create", data={
+            "csrf_token": token,
+            "name": "Intake Project",
+            "brief": "A detailed paragraph describing the product.",
+            "language": "Python 3.12",
+            "interface_type": "Web application",
+            "target_users": "Small teams",
+            "core_workflows": "Create, review, close tasks",
+            "non_goals": "No billing",
+            "runtime_deployment": "Local LAN",
+            "stack_libraries": "FastAPI",
+            "accessibility_security": "WCAG AA, local auth",
+            "testing_expectations": "pytest + browser smoke",
+        }, follow_redirects=False)
+        assert response.status_code == 303
+        pid = response.headers["location"].rsplit("/", 1)[-1]
+
+        project = initialized_store.get_project(pid)
+        settings = project["settings"]
+        assert project["brief"] == "A detailed paragraph describing the product."
+        assert settings["intake"]["language"] == "Python 3.12"
+        assert settings["intake"]["interface_type"] == "Web application"
+        assert settings["intake"]["target_users"] == "Small teams"
+        assert settings["intake"]["testing_expectations"] == "pytest + browser smoke"
+        assert settings["intake_complete"] is False
+        assert settings["target_env"]["language"] == "Python 3.12"
+
+    async def test_intake_answers_and_begin_design_enqueue_commands(self, client, initialized_store):
+        token = await _csrf(client)
+        pid = initialized_store.conn.execute("SELECT id FROM projects LIMIT 1").fetchone()[0]
+
+        response = await client.post(f"/projects/{pid}/intake/answers", data={
+            "csrf_token": token, "q_Q1": "developers", "q_Q2": "",
+        }, follow_redirects=False)
+        assert response.status_code == 303
+        response = await client.post(f"/projects/{pid}/intake/begin", data={
+            "csrf_token": token,
+        }, follow_redirects=False)
+        assert response.status_code == 303
+
+        actions = [
+            row["action"] for row in initialized_store.conn.execute(
+                "SELECT action FROM commands WHERE project_id=? ORDER BY created_at, id", (pid,)
+            ).fetchall()
+        ]
+        assert actions == ["answer_intake", "begin_design"]
+
+    async def test_project_page_shows_info_gathering_panel(self, client, initialized_store):
+        pid = initialized_store.conn.execute("SELECT id FROM projects LIMIT 1").fetchone()[0]
+        settings = {
+            "intake": {"description": "x"},
+            "intake_complete": False,
+            "intake_questions": [{"id": "Q1", "question": "Who will use it?", "why": "scope"}],
+        }
+        with Store(initialized_store.db_path, read_only=False) as writable:
+            writable.update_project(pid, settings=settings)
+        response = await client.get(f"/projects/{pid}")
+        assert response.status_code == 200
+        assert "Info Gathering" in response.text
+        assert "Who will use it?" in response.text
+        assert 'name="q_Q1"' in response.text
+        assert "Begin design / spec-ing now" in response.text
+
+    async def test_uploaded_spec_seeds_root_and_skips_info_gathering(self, client, initialized_store):
+        token = await _csrf(client)
+        spec_text = "# Existing Spec\n\nImported from a file.\n\n## Requirements\n- R1: Works\n"
+        response = await client.post("/projects/create", data={
+            "csrf_token": token,
+            "name": "Imported Spec Project",
+            "brief": "",
+        }, files={"spec_file": ("SPEC.md", spec_text, "text/markdown")}, follow_redirects=False)
+        assert response.status_code == 303, response.text
+        pid = response.headers["location"].rsplit("/", 1)[-1]
+
+        with Store(initialized_store.db_path, read_only=True) as store:
+            project = store.get_project(pid)
+            root = store.list_nodes(pid, parent_id=None)[0]
+            artifacts = store.list_artifacts(pid, node_id=root["id"])
+            events = store.list_events(pid, limit=100)
+        assert project["settings"]["intake_complete"] is True
+        assert project["settings"]["clarified"] is True
+        assert project["settings"]["intake"]["source"] == "uploaded-spec"
+        assert root["spec_text"] == spec_text
+        assert any(a["kind"] == "spec" for a in artifacts)
+        assert any(e["type"] == "project.spec_uploaded" for e in events)
+

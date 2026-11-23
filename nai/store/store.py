@@ -36,7 +36,7 @@ NODE_STATUSES = {
 PROJECT_STATUSES = {"active", "paused", "done", "cancelled", "archived"}
 NODE_KINDS = {"system", "subsystem", "component", "leaf", "integration"}
 JOB_KINDS = {
-    "clarify", "decompose", "select_map", "interfaces", "check_interfaces",
+    "intake", "clarify", "decompose", "select_map", "interfaces", "check_interfaces",
     "component_spec", "lint", "reconcile",
     "contract_stub", "author_tests", "implement", "verify", "integrate", "diagnose", "review",
 }
@@ -44,7 +44,7 @@ ARTIFACT_KINDS = {"spec", "contract", "code", "test", "output-file", "report", "
 APPROVAL_STAGES = {"component-map", "interfaces", "component-spec", "escalation"}
 COMMAND_ACTIONS = {
     "pause", "resume", "cancel_job", "cancel", "retry_node", "approve", "reject",
-    "rerun_stage", "reorder", "archive", "unarchive",
+    "rerun_stage", "reorder", "archive", "unarchive", "answer_intake", "begin_design",
 }
 
 # STO-4. A transition to stale is permitted from every state, including done.

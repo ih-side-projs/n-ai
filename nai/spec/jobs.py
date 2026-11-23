@@ -7,12 +7,23 @@ from pathlib import Path
 from typing import Any
 
 from .checkers import check_interfaces, lint_spec
-from .prompts import CHECK_INTERFACES, CLARIFY, COMPONENT_SPEC, DECOMPOSE, INTERFACES, RECONCILE, SELECT_MAP, get_prompt
+from .prompts import (
+    CHECK_INTERFACES,
+    CLARIFY,
+    COMPONENT_SPEC,
+    DECOMPOSE,
+    INTAKE,
+    INTERFACES,
+    RECONCILE,
+    SELECT_MAP,
+    get_prompt,
+)
 from .schemas import (
     CHECK_INTERFACES_SCHEMA,
     CLARIFY_SCHEMA,
     COMPONENT_SPEC_SCHEMA,
     DECOMPOSE_SCHEMA,
+    INTAKE_SCHEMA,
     INTERFACES_SCHEMA,
     RECONCILE_SCHEMA,
     SELECT_MAP_SCHEMA,
@@ -323,6 +334,67 @@ def handle_reconcile(ctx: Any) -> Any:
         return _requeue(ctx, "reconcile", _round(ctx), findings=findings)
     ctx.event("spec.reconcile_passed", "Sibling reconciliation passed", level="info", data={"findings": findings})
     return _make_job_result(True, findings=findings, prompt_id=get_prompt(RECONCILE).id)
+
+
+# ---------------------------------------------------------------------------
+# Stage -1: Info Gathering (structured project intake)
+# ---------------------------------------------------------------------------
+
+def handle_intake(ctx: Any) -> Any:
+    """Act as a product manager: ask focused questions, then hand off to design."""
+    ctx.check()
+    project = ctx.project
+    settings = dict(project.get("settings") or {})
+    intake = dict(settings.get("intake") or {})
+    forced = bool((ctx.job.get("input_ref") or {}).get("force_refine"))
+    payload = {
+        "force_design": forced,
+        "brief": project.get("brief", ""),
+        "intake": intake,
+        "answers": intake.get("answers") or {},
+        "previous_questions": settings.get("intake_questions") or [],
+        "readiness_summary": settings.get("intake_readiness_summary") or "",
+    }
+    try:
+        result = _call_structured(ctx, INTAKE, payload, INTAKE_SCHEMA, "intake")
+    except RuntimeError as exc:
+        return _make_job_result(False, error=str(exc))
+
+    questions = result.get("questions") or []
+    ready = bool(result.get("ready_for_design")) or forced
+    if forced:
+        questions = []
+    if not ready and not questions:
+        # Avoid a tight planner loop if a model returns neither readiness nor a
+        # follow-up question.
+        questions = [{
+            "id": "Q1",
+            "question": "What else should we know before design begins?",
+            "why": "More detail is required to design the solution",
+        }]
+    settings["intake_questions"] = questions
+    settings["intake_readiness_summary"] = result.get("readiness_summary", "")
+    settings["intake_refined_brief"] = result.get("refined_brief", "")
+    settings["intake_guardrails"] = result.get("guardrails") or {}
+    settings["intake_waiting"] = not ready and bool(questions)
+
+    if ready:
+        settings["intake_complete"] = True
+        settings["clarified"] = True
+        refined = str(result.get("refined_brief") or "").strip()
+        if refined:
+            roots = ctx.store.list_nodes(project["id"], parent_id=None) or []
+            if roots:
+                ctx.store.update_node_spec(roots[0]["id"], refined)
+        ctx.event("spec.intake_ready", "Info gathering complete; design can begin",
+                  level="info", data={"summary": settings["intake_readiness_summary"]})
+    else:
+        ctx.event("spec.intake_questions", f"Info gathering needs {len(questions)} answer(s)",
+                  level="info", data={"questions": questions})
+
+    ctx.store.update_project(project["id"], settings=settings)
+    return _make_job_result(True, ready_for_design=ready, questions=questions,
+                            prompt_id=get_prompt(INTAKE).id)
 
 
 # ---------------------------------------------------------------------------

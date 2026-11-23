@@ -358,3 +358,31 @@ def test_SCH6_archive_and_unarchive_through_command_queue(store, pid, tmp_path):
     assert store.events_of("project.archived")
     assert store.events_of("project.unarchived")
 
+
+
+def test_SCH6_intake_answers_and_begin_design(store, pid, tmp_path):
+    root = store.create_node(pid, "root", "system")
+    store.update_project(pid, settings={"intake": {"description": "x"}, "intake_complete": False,
+                                        "intake_waiting": True})
+    r = make_runner(store, None, tmp_path)
+
+    store.enqueue_command(pid, "answer_intake", payload={"answers": {"Q1": "developers"}})
+    r.step()
+    settings = store.get_project(pid)["settings"]
+    assert settings["intake"]["answers"]["Q1"] == "developers"
+    assert settings["intake_waiting"] is False
+    assert store.events_of("project.intake_answers")
+
+    store.enqueue_command(pid, "begin_design")
+    r.step()
+    forced_jobs = [j for j in store.list_jobs(pid) if j.get("kind") == "intake"]
+    assert len(forced_jobs) == 1
+    assert forced_jobs[0]["node_id"] == root
+    assert forced_jobs[0]["input_ref"]["force_refine"] is True
+
+    settings = store.get_project(pid)["settings"]
+    assert settings["intake_complete"] is True
+    assert settings["intake_forced"] is True
+    assert settings["clarified"] is True
+    assert store.events_of("project.design_forced")
+

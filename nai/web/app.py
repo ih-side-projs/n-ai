@@ -18,14 +18,21 @@ from typing import Any
 
 import bleach
 import mistune
-from fastapi import Depends, FastAPI, Form, HTTPException, Request
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from nai.store import Store
 
-from ..workflow import DESIGN, IMPLEMENTATION, filter_tree_to_phase, node_phase, phase_summary
+from ..workflow import (
+    DESIGN,
+    IMPLEMENTATION,
+    INFO_GATHERING,
+    filter_tree_to_phase,
+    node_phase,
+    project_phase_summary,
+)
 from .metrics import _all_nodes, build_project_metrics
 from .models import ModelServerClient, ModelServerError
 from .security import new_csrf_token, verify_bearer_or_cookie, verify_same_origin, verify_token
@@ -177,7 +184,11 @@ def create_app(
 
     def render(request: Request, name: str, context: dict[str, Any] | None = None, status_code: int = 200):
         payload = {"request": request, "csrf_token": request.state.csrf_token, **(context or {})}
-        return templates.TemplateResponse(request=request, name=name, context=payload, status_code=status_code)
+        response = templates.TemplateResponse(request=request, name=name, context=payload, status_code=status_code)
+        # Control pages reflect live store state; never let a browser cache or
+        # bfcache silently show an old filter/view after a command is processed.
+        response.headers["Cache-Control"] = "no-store"
+        return response
 
     def project_or_404(store: Store, project_id: str) -> dict[str, Any]:
         project = store.get_project(project_id)
@@ -257,7 +268,11 @@ def create_app(
             "budget": budget,
             "budget_limit_tokens": budget_limit,
             "budget_percent": budget_percent,
-            **phase_summary(nodes, {nid: [j for j in jobs if j.get("node_id") == nid] for nid in (n["id"] for n in nodes)}),
+            **project_phase_summary(
+                nodes,
+                {nid: [j for j in jobs if j.get("node_id") == nid] for nid in (n["id"] for n in nodes)},
+                project,
+            ),
         }
 
     def node_page_data(store: Store, project_id: str, node: dict[str, Any]) -> dict[str, Any]:
@@ -323,21 +338,91 @@ def create_app(
         return RedirectResponse(url="/projects", status_code=303)
 
     @app.post("/projects/create")
-    async def projects_create(request: Request, name: str = Form(...), brief: str = Form("")):
-        """Create a project and its root spec node (WEB-1 intake via the runner-owned store)."""
+    async def projects_create(
+        request: Request,
+        name: str = Form(...),
+        brief: str = Form(""),
+        language: str = Form(""),
+        interface_type: str = Form(""),
+        target_users: str = Form(""),
+        core_workflows: str = Form(""),
+        non_goals: str = Form(""),
+        runtime_deployment: str = Form(""),
+        stack_libraries: str = Form(""),
+        accessibility_security: str = Form(""),
+        testing_expectations: str = Form(""),
+        spec_file: UploadFile | None = File(None),
+    ):
+        """Create a project with structured Info Gathering guardrails."""
         name = name.strip()
         if not name:
             raise HTTPException(status_code=400, detail="Project name is required")
         if not settings.database_path.is_file():
             raise HTTPException(status_code=503, detail="N-AI database not found")
+        uploaded_spec = ""
+        if spec_file is not None and spec_file.filename:
+            raw = await spec_file.read(2_000_001)
+            if len(raw) > 2_000_000:
+                raise HTTPException(status_code=413, detail="Spec file exceeds 2 MB")
+            decoded = raw.decode("utf-8", errors="replace")
+            uploaded_spec = decoded if decoded.strip() else ""
+        description = brief.strip() or (uploaded_spec.strip()[:500] if uploaded_spec else "")
+        guardrails = {
+            "description": description,
+            "source": "uploaded-spec" if uploaded_spec else "dialog",
+            "language": language.strip(),
+            "interface_type": interface_type.strip(),
+            "target_users": target_users.strip(),
+            "core_workflows": core_workflows.strip(),
+            "non_goals": non_goals.strip(),
+            "runtime_deployment": runtime_deployment.strip(),
+            "stack_libraries": stack_libraries.strip(),
+            "accessibility_security": accessibility_security.strip(),
+            "testing_expectations": testing_expectations.strip(),
+        }
+        project_settings: dict[str, Any] = {
+            "intake": guardrails,
+            "intake_complete": False,
+            "intake_waiting": False,
+        }
+        if guardrails["language"]:
+            project_settings["target_env"] = {"language": guardrails["language"]}
+        if uploaded_spec:
+            project_settings["intake_complete"] = True
+            project_settings["clarified"] = True
         store = Store(settings.database_path, read_only=False)
         try:
-            pid = store.create_project(name, brief.strip(), settings={})
-            store.create_node(pid, "root", "system", objective=brief.strip() or f"Root specification for {name}")
+            pid = store.create_project(name, description, settings=project_settings)
+            root_id = store.create_node(
+                pid, "root", "system",
+                objective=description or f"Root specification for {name}",
+                spec_text=uploaded_spec or description,
+            )
+            if uploaded_spec:
+                store.add_artifact(pid, "spec", uploaded_spec, node_id=root_id,
+                                   filename=spec_file.filename or "SPEC.md")
+                store.record_event(pid, "project.spec_uploaded",
+                                   f"Existing spec uploaded for '{name}'", level="info")
             store.record_event(pid, "project.created_via_web", f"Project '{name}' created from the dashboard", level="info")
         finally:
             store.close()
         return RedirectResponse(url=f"/projects/{pid}", status_code=303)
+
+    @app.post("/projects/{project_id}/intake/answers")
+    async def project_intake_answers(project_id: str, request: Request):
+        form = getattr(request.state, "parsed_form", None) or await request.form()
+        answers = {
+            key[2:]: str(value).strip()
+            for key, value in form.multi_items()
+            if key.startswith("q_") and str(value).strip()
+        }
+        _enqueue_command(project_id, "answer_intake", payload={"answers": answers})
+        return RedirectResponse(url=f"/projects/{project_id}", status_code=303)
+
+    @app.post("/projects/{project_id}/intake/begin")
+    async def project_intake_begin(project_id: str):
+        _enqueue_command(project_id, "begin_design")
+        return RedirectResponse(url=f"/projects/{project_id}", status_code=303)
 
     @app.get("/projects/{project_id}", response_class=HTMLResponse)
     def project_page(project_id: str, request: Request, phase: str | None = None,
@@ -346,13 +431,17 @@ def create_app(
         tree = project_tree(store, project_id)
         # Named workflow phase view: design (specs/approvals) or implementation
         # (code/tests/integration). "all" (default) keeps both visible.
-        selected_phase = phase if phase in (DESIGN, IMPLEMENTATION) else "all"
-        if selected_phase != "all":
+        selected_phase = phase if phase in (INFO_GATHERING, DESIGN, IMPLEMENTATION) else "all"
+        if selected_phase in (DESIGN, IMPLEMENTATION):
             tree = filter_tree_to_phase(tree, selected_phase, project.get("per_node"))
         return render(request, "project.html", {"project": project, "tree": tree,
                       "runner": runner_status(), "active_page": "projects",
                       "selected_phase": selected_phase,
-                      "phase_constants": {"design": DESIGN, "implementation": IMPLEMENTATION}})
+                      "phase_constants": {
+                          "info_gathering": INFO_GATHERING,
+                          "design": DESIGN,
+                          "implementation": IMPLEMENTATION,
+                      }})
 
     @app.get("/projects/{project_id}/nodes/{node_id}", response_class=HTMLResponse)
     def node_page(project_id: str, node_id: str, request: Request, store: Store = Depends(get_store)):
@@ -397,9 +486,13 @@ def create_app(
                                  "coder": profile.coder.to_dict(),
                                  "swap_cost_seconds": profile.swap_cost_seconds})
         snapshot = app.state.model_client.snapshot()
+        model_ids = []
+        for model in snapshot.get("models") or []:
+            if isinstance(model, dict) and model.get("id"):
+                model_ids.append(str(model["id"]))
         return render(request, "models.html", {"profiles": profiles, "snapshot": snapshot,
                       "active_page": "models", "smoke_result": None, "message": None,
-                      "stored_names": stored_names})
+                      "stored_names": stored_names, "model_ids": model_ids})
 
     @app.post("/models/profile")
     async def models_save_profile(request: Request):

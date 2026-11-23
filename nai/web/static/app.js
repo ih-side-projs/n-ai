@@ -99,12 +99,62 @@ document.addEventListener('DOMContentLoaded', () => {
     return div.innerHTML;
   }
 
-  // Confirmation-only forms still submit normally; the inline onsubmit form is
-  // blocked by the CSP, so keep confirmation in this external script.
-  document.querySelectorAll('form.confirm-form').forEach(form => {
-    form.addEventListener('submit', (e) => {
+  // Native dialog handling for the structured new-project form.
+  document.querySelectorAll('[data-open-dialog]').forEach(button => {
+    button.addEventListener('click', () => {
+      const dialog = document.getElementById(button.dataset.openDialog);
+      if (dialog && typeof dialog.showModal === 'function') {
+        dialog.showModal();
+      }
+    });
+  });
+  document.querySelectorAll('[data-close-dialog]').forEach(button => {
+    button.addEventListener('click', () => {
+      const dialog = button.closest('dialog');
+      if (dialog && typeof dialog.close === 'function') {
+        dialog.close();
+      }
+    });
+  });
+
+  // Submit ordinary POST forms through fetch with a custom X-Requested-With
+  // header. This preserves CSRF protection while allowing browsers/privacy
+  // extensions that send `Origin: null` to use the dashboard.
+  document.querySelectorAll('form[method="post"]').forEach(form => {
+    if (form.classList.contains('control-form') || form.classList.contains('tool-try-form')) {
+      return;
+    }
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
       if (form.dataset.confirm && !window.confirm(form.dataset.confirm)) {
-        e.preventDefault();
+        return;
+      }
+      try {
+        const response = await fetch(form.action, {
+          method: 'POST',
+          body: new FormData(form),
+          credentials: 'same-origin',
+          headers: { 'X-Requested-With': 'fetch' }
+        });
+        if (!response.ok) {
+          const type = response.headers.get('content-type') || '';
+          let detail = response.statusText;
+          if (type.includes('json')) {
+            const data = await response.json();
+            detail = data.detail || detail;
+          } else {
+            detail = (await response.text()).slice(0, 300);
+          }
+          window.alert('Request failed: ' + detail);
+          return;
+        }
+        if (response.redirected) {
+          window.location.href = response.url;
+        } else {
+          window.location.reload();
+        }
+      } catch (err) {
+        window.alert('Request failed: ' + err.message);
       }
     });
   });

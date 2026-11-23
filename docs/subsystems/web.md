@@ -35,6 +35,13 @@ Open <http://127.0.0.1:8080>. OpenAPI docs are at `/api/docs`.
 
 ## Controls and approvals
 
+- Create projects through the New Project modal: large description plus optional
+  language, interface type and product/engineering guardrails, or upload an existing
+  Markdown/text spec (which seeds the root spec and skips Info Gathering). New
+  projects enter Info Gathering, where the model asks questions and the owner can
+  force design; forcing with answers enqueues a final refinement job first.
+- Reasoner/coder model ids are chosen from the live llama-swap model catalogue,
+  with a fallback option for a configured id that is not currently listed.
 - Approve/reject node specs (records an approval, transitions status).
 - Retry failed nodes, re-run a stage, mark a node stale.
 - Pause, resume, cancel a project or job, reorder node priorities.
@@ -42,6 +49,9 @@ Open <http://127.0.0.1:8080>. OpenAPI docs are at `/api/docs`.
   `?show_archived=1` or the "Show archived" toggle.
 - A project-wide cancel sets status to `cancelled` so it no longer appears as Active.
 - All state-changing routes are POST-only and enqueue commands where appropriate.
+- Dashboard POST forms are sent through `fetch()` with `X-Requested-With: fetch`;
+  this allows browsers/privacy extensions that emit `Origin: null` while still
+  blocking cross-origin HTML forms and non-CORS fetch requests.
 
 ## Editing with diff
 
