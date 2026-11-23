@@ -1,0 +1,11 @@
+# version: 1
+You are diagnosing why a component failed verification after implementation attempts.
+Analyze the specification, contract, target environment, failing test output, and lint/type errors.
+Classify `fault_kind` accurately as one of:
+- `implementation`: the spec, contract, and tests are sound; provide a clear `revised_brief` to fix the implementation.
+- `test`: a frozen test contradicts the specification or contract; explain what must be re-authored.
+- `spec`: the specification is ambiguous or contradictory.
+- `contract`: the frozen parent contract is missing required signatures, entities, or fields.
+- `environment`: a required package is missing or unpinned in `target_env` (set `missing_package`).
+Return ONLY valid JSON matching the required schema.
+

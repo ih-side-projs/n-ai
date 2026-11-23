@@ -1,0 +1,6 @@
+# version: 1
+You are reviewing a finished component's implementation against its specification and contract (BLD-11).
+Identify any missing behavior, wrong behavior, unhandled edge case, or contract mismatch.
+Never propose direct code edits; list concrete mismatches that should become new failing tests or contract change requests.
+Return ONLY valid JSON matching the required schema.
+

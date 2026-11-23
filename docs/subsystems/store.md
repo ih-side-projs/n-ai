@@ -56,7 +56,9 @@ content_hash = sha1(spec_text + canonical_json(contract)
 ```
 
 `recompute_project_hashes()` updates every node transactionally and marks
-hash-changed nodes and dependents `stale`.
+hash-changed nodes and dependents `stale`. Design-stage nodes (`draft` and
+`awaiting_approval`) only receive the new hash; they are not invalidated before
+they have been built.
 
 ## Useful methods
 

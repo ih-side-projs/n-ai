@@ -8,6 +8,10 @@ code is written. It registers job handlers as scheduler plugins.
 | # | Job | Purpose |
 |---|-----|---------|
 | -1 | `intake` | Product-manager questions and refined brief before design (WEB-1) |
+
+The decomposed component map is also stored in project settings so that the
+later interfaces contract can replace the root contract without losing the
+component names needed by `component_spec`.
 | 1 | `decompose` | Component map (children, shared entities, external I/O) |
 | 2 | `select_map` | Optional candidate selection/merge (D2: 3 at root, 1 elsewhere) |
 | 3 | `interfaces` | Contract: entities, components, scenarios |

@@ -33,6 +33,9 @@ NODE_STATUSES = {
     "draft", "awaiting_approval", "approved", "ready", "running", "verifying",
     "done", "failed", "escalated", "blocked", "stale",
 }
+# Design-stage nodes are not built yet. Rehashing them must not invalidate them
+# into `stale`, which would let the build planner promote them to `ready`.
+HASH_DESIGN_STATUSES = {"draft", "awaiting_approval"}
 PROJECT_STATUSES = {"active", "paused", "done", "cancelled", "archived"}
 NODE_KINDS = {"system", "subsystem", "component", "leaf", "integration"}
 JOB_KINDS = {
@@ -635,6 +638,8 @@ class Store:
         return hashes
 
     def _mark_node_stale(self, conn: sqlite3.Connection, old_row: sqlite3.Row, old_hash: str, new_hash: str) -> None:
+        if str(old_row["status"] or "") in HASH_DESIGN_STATUSES:
+            return
         # Route hash invalidation through the same authoritative status transition
         # function used by scheduler/owner actions (STO-4).
         rejected = self._apply_node_status_transition(

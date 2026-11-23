@@ -662,7 +662,7 @@ class Runner:
 
     def recover(self) -> dict:
         """SCH-7 / X4: jobs left `running` by a crash go back to `queued`; the report goes to events."""
-        report = {"requeued_jobs": 0, "orphan_nodes": 0}
+        report = {"requeued_jobs": 0, "orphan_nodes": 0, "invalid_roots": 0}
         for p in self.store.list_projects():
             if p.get("status") == "archived":
                 continue
@@ -698,6 +698,24 @@ class Runner:
                                 f"{'reset to ready' if repaired else 'could not repair'}",
                                 node_id=n["id"], level="warning",
                                 data={"repaired": repaired, "previous_status": n["status"]})
+
+                # Older builds could promote an unapproved root from stale to
+                # ready after intake. Repair that impossible design state.
+                if (n.get("kind") == "system" and not n.get("parent_id")
+                        and n.get("status") in ("ready", "running", "verifying")
+                        and not n.get("contract")
+                        and not self.store.list_approvals(n["id"])
+                        and not self.store.list_nodes(pid, parent_id=n["id"])):
+                    previous_status = n["status"]
+                    self.store.transition_node_status(
+                        n["id"], "stale", note="recovery: root entered implementation without approval",
+                    )
+                    self.store.transition_node_status(n["id"], "draft", note="recovery: return unapproved root to design")
+                    report["invalid_roots"] += 1
+                    self._event(pid, "runner.invalid_root_repaired",
+                                "unapproved root returned to design",
+                                node_id=n["id"], level="warning",
+                                data={"previous_status": previous_status})
             self._event(pid, "runner.started", "runner started", data=dict(report))
         self.mark_dirty()
         return report

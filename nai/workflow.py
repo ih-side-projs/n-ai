@@ -165,7 +165,7 @@ def next_step(project: dict[str, Any], nodes: Iterable[dict[str, Any]],
     if statuses & IMPLEMENTATION_STATUSES:
         return {
             "title": "Watch implementation",
-            "body": "Design is approved and implementation has started. Check jobs, artifacts, and traceability as nodes complete.",
+            "body": "Nodes are in an implementation state. Check that the relevant interfaces approvals exist, then follow jobs, artifacts, and traceability.",
             "label": "Open logs", "href": f"/projects/{pid}/logs",
         }
     return {

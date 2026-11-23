@@ -95,3 +95,13 @@ def test_hash_recompute_is_idempotent(store, project):
     result = store.recompute_project_hashes(project)
     assert result[root] == before
     assert store.get_node(root)["status"] == "draft"
+
+
+def test_spec_change_on_design_node_updates_hash_without_staling(store, project):
+    node = store.create_node(project, "root", "system", spec_text="before")
+    old_hash = store.get_node(node)["content_hash"]
+    store.update_node_spec(node, "after")
+    row = store.get_node(node)
+    assert row["status"] == "draft"
+    assert row["content_hash"] != old_hash
+

@@ -40,6 +40,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **§4 / STO-5**: `content_hash` now uses each dependency's *interface hash* (contract only), not its full content hash. Editing a dependency's spec or implementation no longer stales dependents whose interface is unchanged.
 - **STO-4 / SCH-5**: `blocked` is now reachable. Budget exhaustion moves `ready`/`running`/`verifying → blocked`, then the failure ladder moves `blocked → failed`. Owner retry can move `blocked → ready` with a fresh budget.
 - **SCH-4**: test authoring can be batched ahead of implementation: an approved node with healthy (not done) dependencies may be promoted to `ready`; `implement` still requires all dependencies `done`.
+- **STO-5 / BLD-10 / SCH-7**: hash updates on design-stage nodes no longer mark them stale; stale nodes are auto-promoted only when BLD-10's `built_hash == content_hash` plus frozen-test conditions hold; runner recovery returns an unapproved root from an implementation status to `draft`. This fixes projects that entered implementation directly after Info Gathering. The decomposed component map is preserved in project settings so later interface contracts do not erase the child names needed by `component_spec`.
+- `.gitignore` now ignores only root-level `/build/`, so the integrated `nai/build/` package and `tests/build/` suite are tracked.
 
 ### Security
 

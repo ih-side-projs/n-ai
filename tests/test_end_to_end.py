@@ -90,5 +90,7 @@ def test_brief_to_spec_build_done(tmp_path: Path):
             raise AssertionError(f"no child nodes. jobs={[(j.get('kind'), j.get('status'), j.get('error')) for j in check.list_jobs(pid, limit=100)]} events={[e.get('type') for e in events[-20:]]}")
         child = [n for n in nodes if n.get("name") == "child"]
         assert child, "decompose did not create child nodes"
-        assert child[0].get("spec_text"), "component_spec did not persist spec_text"
+        jobs_summary = [(j.get("kind"), j.get("status"), j.get("error")) for j in check.list_jobs(pid, limit=100)]
+        event_types = [e.get("type") for e in events[-30:]]
+        assert child[0].get("spec_text"), f"component_spec did not persist spec_text: jobs={jobs_summary} events={event_types}"
         check.close()

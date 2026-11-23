@@ -63,10 +63,15 @@ def plan(pc: Any) -> None:
 
         if parent_id is None:
             if status == "draft":
-                if not settings.get("assumptions") and not settings.get("clarified"):
-                    pc.store.create_job(pid, "clarify", "reasoner", node_id=nid)
-                else:
-                    pc.store.create_job(pid, "decompose", "reasoner", node_id=nid)
+                if not contract:
+                    if not settings.get("assumptions") and not settings.get("clarified"):
+                        pc.store.create_job(pid, "clarify", "reasoner", node_id=nid)
+                    else:
+                        pc.store.create_job(pid, "decompose", "reasoner", node_id=nid)
+                elif "shared_entities" in contract or "external_inputs" in contract:
+                    # Decompose produced the component map; generate the root
+                    # interface contract before children are specified.
+                    pc.store.create_job(pid, "interfaces", "reasoner", node_id=nid)
             continue
 
         if kind not in ("subsystem", "component"):

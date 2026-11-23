@@ -148,6 +148,11 @@ def handle_decompose(ctx: Any) -> Any:
         return _make_job_result(False, error=str(e))
     cm = {"components": result["components"], "shared_entities": result["shared_entities"], "external_inputs": result["external_inputs"], "external_outputs": result["external_outputs"]}
     ctx.store.update_node_contract(node["id"], cm)
+    # Preserve the component map separately: the interfaces stage later replaces
+    # the root contract with the interface contract.
+    settings = dict(project.get("settings") or {})
+    settings["component_map"] = cm
+    ctx.store.update_project(project["id"], settings=settings)
     # Create a child node for each component so the spec tree is recursable (stage 11).
     existing = {c["name"] for c in ctx.store.list_nodes(project["id"], parent_id=node["id"])}
     for child in cm["components"]:
@@ -256,11 +261,15 @@ def handle_component_spec(ctx: Any) -> Any:
     parent_contract = _get_parent_contract(ctx, node)
     if not parent_contract:
         return _make_job_result(False, error="Parent contract not found")
+    settings = dict(project.get("settings") or {})
+    component_map = dict(settings.get("component_map") or {})
     component_info = next((c for c in parent_contract.get("components", []) if c["name"] == node["name"]), None)
+    if component_info is None:
+        component_info = next((c for c in component_map.get("components", []) if c["name"] == node["name"]), None)
     if not component_info:
         return _make_job_result(False, error=f"Component {node['name']} not found in parent contract")
     shared_entities = []
-    for entity in parent_contract.get("entities", []):
+    for entity in (parent_contract.get("entities", []) or component_map.get("shared_entities", [])):
         used = any(entity["name"].lower() in p.get("signature", "").lower() for p in component_info.get("provides", []))
         used = used or (node["name"] in component_info.get("consumes", []))
         if used:

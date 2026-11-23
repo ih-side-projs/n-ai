@@ -44,6 +44,7 @@ def test_list_jobs_returns_recent_window(tmp_path):
 
 def test_orphan_node_repaired(tmp_path):
     s, pid, root, db = _project(tmp_path)
+    s.add_approval(root, "interfaces", "approved")
     s.transition_node_status(root, "awaiting_approval")
     s.transition_node_status(root, "approved")
     s.transition_node_status(root, "ready")
@@ -57,3 +58,20 @@ def test_orphan_node_repaired(tmp_path):
     assert s2.get_node(root)["status"] == "ready"
     events = [e for e in s2.list_events(pid, limit=100) if e["type"] == "runner.orphan_node"]
     assert events and events[-1]["data"]["repaired"] is True
+
+
+def test_unapproved_ready_root_returned_to_design(tmp_path):
+    s, pid, root, db = _project(tmp_path)
+    s.transition_node_status(root, "awaiting_approval")
+    s.transition_node_status(root, "approved")
+    s.transition_node_status(root, "ready")
+    s.close()
+
+    s2 = Store(db, read_only=False)
+    runner = Runner(s2, None, state_dir=tmp_path / ".nai")
+    report = runner.recover()
+    assert report["invalid_roots"] == 1
+    assert s2.get_node(root)["status"] == "draft"
+    events = [e for e in s2.list_events(pid, limit=100) if e["type"] == "runner.invalid_root_repaired"]
+    assert events
+
