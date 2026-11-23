@@ -465,3 +465,17 @@ class TestStructuredProjectIntake:
         assert f'href="/projects/{pid}?phase=design"' in response.text
 
 
+
+
+async def test_node_page_sections_have_scoped_scroll(client, initialized_store):
+    pid = initialized_store.conn.execute("SELECT id FROM projects LIMIT 1").fetchone()[0]
+    nid = initialized_store.conn.execute("SELECT id FROM nodes LIMIT 1", ()).fetchone()[0]
+    response = await client.get(f"/projects/{pid}/nodes/{nid}")
+    assert response.status_code == 200
+    for marker in (
+        "node-scroll-panel", "node-panel-spec", "node-panel-details",
+        "node-panel-contract", "node-panel-traceability", "node-panel-jobs",
+        "node-panel-artifacts", "node-panel-body",
+    ):
+        assert marker in response.text
+

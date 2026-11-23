@@ -135,6 +135,19 @@ body {
 .small-input { width: 200px; }
 .panel { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); padding: 1rem; margin-bottom: 1rem; }
 .panel h2 { margin: 0 0 0.75rem; font-size: 1rem; font-weight: 600; }
+.node-scroll-panel { --node-panel-max: 360px; display: flex; flex-direction: column; max-height: var(--node-panel-max); overflow: hidden; }
+.node-scroll-panel > h2 { flex: none; }
+.node-panel-body { min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; padding-right: 0.35rem; }
+.node-panel-spec { --node-panel-max: 520px; }
+.node-panel-details { --node-panel-max: 320px; }
+.node-panel-contract { --node-panel-max: 380px; }
+.node-panel-traceability { --node-panel-max: 420px; }
+.node-panel-jobs { --node-panel-max: 420px; }
+.node-panel-artifacts { --node-panel-max: 300px; }
+@media (max-width: 900px) {
+  .node-scroll-panel { --node-panel-max: 300px; }
+  .node-panel-spec { --node-panel-max: 360px; }
+}
 .section-heading { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 0.75rem; }
 .section-heading h2 { margin: 0; }
 .section-heading .muted { margin: 0; }

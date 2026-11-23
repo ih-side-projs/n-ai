@@ -50,6 +50,9 @@ Open <http://127.0.0.1:8080>. OpenAPI docs are at `/api/docs`.
 - Archive/restore projects; archived projects are hidden by default and visible via
   `?show_archived=1` or the "Show archived" toggle.
 - A project-wide cancel sets status to `cancelled` so it no longer appears as Active.
+- Node-page sections use capped heights with independent internal scrolling, so
+  the page stays compact while long specs, contracts, traceability tables, job
+  histories, and artifact lists remain readable.
 - All state-changing routes are POST-only and enqueue commands where appropriate.
 - Dashboard POST forms are sent through `fetch()` with `X-Requested-With: fetch`;
   this allows browsers/privacy extensions that emit `Origin: null` while still
