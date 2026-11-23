@@ -29,22 +29,27 @@ class ServiceConfig:
 
     @property
     def socket_path(self) -> Path:
+        """Socket path."""
         return self.state_dir / self.socket_name
 
     @property
     def pid_path(self) -> Path:
+        """Pid path."""
         return self.state_dir / self.pid_name
 
     @property
     def log_dir(self) -> Path:
+        """Log dir."""
         return self.state_dir / self.log_dir_name
 
     @property
     def effective_db_path(self) -> Path:
+        """Effective db path."""
         return self.db_path or self.state_dir / "nai.sqlite3"
 
     @classmethod
     def from_env(cls, state_dir: str | Path | None = None, **overrides) -> ServiceConfig:
+        """Build an instance from environment variables."""
         import sys
 
         root = Path(state_dir or os.environ.get("NAI_STATE_DIR", ".nai"))
@@ -62,6 +67,7 @@ class ServiceConfig:
         return cfg
 
     def child_env(self) -> dict[str, str]:
+        """Build the environment for a child process."""
         env = dict(os.environ)
         env["NAI_DB_PATH"] = str(self.effective_db_path)
         env["NAI_WEB_HOST"] = self.web_host

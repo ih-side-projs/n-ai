@@ -30,6 +30,7 @@ def _call(cfg: ServiceConfig, cmd: str, **kwargs: Any) -> Any:
 
 
 def service_main(argv: list[str] | None = None) -> int:
+    """Service main."""
     parser = argparse.ArgumentParser(prog="nai service", description="Manage the nai background service")
     parser.add_argument("--state-dir", default=None, help="State directory (default NAI_STATE_DIR or .nai)")
     parser.add_argument("--host", default=None, help="Web bind address")

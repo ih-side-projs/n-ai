@@ -49,6 +49,7 @@ def node_phase(node: dict[str, Any], jobs: Iterable[dict[str, Any]] | None = Non
     recent = list(jobs or [])
     if recent:
         def key(j: dict[str, Any]) -> str:
+            """Key."""
             return str(j.get("created_at") or j.get("started_at") or j.get("ended_at") or "")
 
         latest = max(recent, key=key)
@@ -134,6 +135,7 @@ def filter_tree_to_phase(tree: list[dict[str, Any]], phase: str,
     per_node = per_node or {}
 
     def walk(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Walk."""
         out = []
         for node in nodes:
             kids = walk(node.get("children") or [])

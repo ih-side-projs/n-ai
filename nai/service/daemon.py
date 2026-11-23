@@ -20,10 +20,12 @@ from .protocol import read_request, write_response
 
 
 class ServiceAlreadyRunning(RuntimeError):
+    """Servicealreadyrunning."""
     pass
 
 
 class ServiceNotRunning(RuntimeError):
+    """Servicenotrunning."""
     pass
 
 
@@ -31,6 +33,7 @@ class ServiceDaemon:
     """Supervises child processes and answers control requests on a Unix socket."""
 
     def __init__(self, config: ServiceConfig):
+        """Initialize the object."""
         self.config = config
         self.state_dir = config.state_dir
         self.state_dir.mkdir(parents=True, exist_ok=True)
@@ -75,6 +78,7 @@ class ServiceDaemon:
 
     # ---------------------------------------------------------------- single instance
     def acquire_lock(self) -> None:
+        """Acquire lock."""
         path = self.state_dir / "service.lock"
         fh = open(path, "a+")
         try:
@@ -92,6 +96,7 @@ class ServiceDaemon:
         self.config.pid_path.write_text(str(os.getpid()), encoding="utf-8")
 
     def release_lock(self) -> None:
+        """Release lock."""
         if self._lock_fh:
             try:
                 fcntl.flock(self._lock_fh, fcntl.LOCK_UN)
@@ -200,6 +205,7 @@ class ServiceDaemon:
 
     # ---------------------------------------------------------------- lifecycle helpers
     def status(self) -> dict[str, Any]:
+        """Status."""
         health = None
         try:
             from ..sched.health import read_health
@@ -221,6 +227,7 @@ class ServiceDaemon:
         }
 
     def tail_log(self, name: str, lines: int = 100) -> str:
+        """Tail log."""
         if name in self.children:
             return self.children[name].tail_log(lines)
         if name in self.jobs:
@@ -241,6 +248,7 @@ class ServiceDaemon:
             return "".join(fh.readlines()[-lines:])
 
     def restart_component(self, name: str) -> dict[str, Any]:
+        """Restart component."""
         if name in self.children:
             self.children[name].restart()
             return {"restarted": name}
@@ -311,6 +319,7 @@ class ServiceDaemon:
             proc.start()
 
         def on_signal(signum, frame):
+            """On signal."""
             self._stop.set()
 
         old = {}

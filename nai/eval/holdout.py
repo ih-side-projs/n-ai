@@ -26,6 +26,7 @@ class HoldoutResult:
 
     @property
     def pass_rate(self) -> float:
+        """Pass rate."""
         return self.passed / self.total if self.total else 0.0
 
 
@@ -103,6 +104,7 @@ def run_holdout(holdout_path: Path, workspace: Path, timeout: int = 300) -> Hold
 
 
 def holdout_to_dict(result: HoldoutResult) -> dict[str, Any]:
+    """Holdout to dict."""
     return {
         "applied": result.applied,
         "total": result.total,

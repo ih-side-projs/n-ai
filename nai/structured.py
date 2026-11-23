@@ -91,11 +91,14 @@ def _basic_validate(data: Any, schema: dict[str, Any], path: str = "$") -> list[
 
 
 def json_schema_format(schema: dict[str, Any], name: str = "result") -> dict[str, Any]:
+    """Json schema format."""
     return {"type": "json_schema", "json_schema": {"name": name, "strict": True, "schema": schema}}
 
 
 def json_schema_to_grammar(schema: dict[str, Any]) -> str:
+    """Json schema to grammar."""
     def emit(node: dict[str, Any]) -> str:
+        """Emit."""
         t = node.get("type")
         if "enum" in node:
             return "(" + " | ".join(json.dumps(v) for v in node["enum"]) + ")"

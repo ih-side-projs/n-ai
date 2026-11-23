@@ -38,13 +38,16 @@ class ManagedProcess:
 
     @property
     def pid(self) -> int | None:
+        """Pid."""
         return self.process.pid if self.process else None
 
     @property
     def running(self) -> bool:
+        """Running."""
         return self.process is not None and self.process.poll() is None
 
     def start(self) -> None:
+        """Start."""
         if self.running:
             return
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -103,6 +106,7 @@ class ManagedProcess:
         return True
 
     def restart(self) -> None:
+        """Restart."""
         self.stop()
         self.process = None
         self.started_at = None
@@ -120,6 +124,7 @@ class ManagedProcess:
                 self._log_handle = None
 
     def status(self) -> dict[str, Any]:
+        """Status."""
         return {
             "name": self.name,
             "pid": self.pid,
@@ -134,6 +139,7 @@ class ManagedProcess:
         }
 
     def tail_log(self, lines: int = 100) -> str:
+        """Tail log."""
         if not self.log_path or not self.log_path.exists():
             return ""
         with open(self.log_path, encoding="utf-8", errors="replace") as fh:

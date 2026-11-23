@@ -56,5 +56,6 @@ def read_request(conn: socket.socket) -> dict[str, Any] | None:
 
 
 def write_response(conn: socket.socket, *, ok: bool, data: Any = None, error: str | None = None) -> None:
+    """Write response."""
     payload = {"ok": ok, "data": data, "error": error}
     conn.sendall(json.dumps(payload, default=str).encode("utf-8") + b"\n")

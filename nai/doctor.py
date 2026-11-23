@@ -38,6 +38,7 @@ REQUIRED_TEMPLATES = (
 
 @dataclass(frozen=True)
 class CheckResult:
+    """Checkresult."""
     name: str
     ok: bool
     detail: str = ""
@@ -47,27 +48,35 @@ class _DoctorStore:
     """Minimal Store surface used by planners; no persistence."""
 
     def list_nodes(self, project_id: str, parent_id: str | None = None) -> list[dict]:
+        """List nodes."""
         return []
 
     def list_jobs(self, project_id: str, limit: int = 100000) -> list[dict]:
+        """List jobs."""
         return []
 
     def list_approvals(self, node_id: str) -> list[dict]:
+        """List approvals."""
         return []
 
     def get_node(self, node_id: str) -> dict | None:
+        """Get node."""
         return None
 
     def create_job(self, project_id, kind, model_role, *, node_id=None, attempt=1, input_ref=None) -> str:
+        """Create job."""
         return f"doctor-{kind}"
 
     def transition_node_status(self, node_id: str, status: str, note: str = "") -> None:
+        """Transition node status."""
         return None
 
     def record_event(self, project_id, event_type, message, **kwargs) -> None:
+        """Record event."""
         return None
 
     def add_artifact(self, project_id, kind, content, *, node_id=None, filename="artifact.txt") -> str:
+        """Add artifact."""
         return "doctor-artifact"
 
 
@@ -76,6 +85,7 @@ def _pkg_root() -> Path:
 
 
 def check_imports() -> CheckResult:
+    """Check imports."""
     failures = []
     for name in MODULES:
         try:
@@ -89,6 +99,7 @@ def check_imports() -> CheckResult:
 
 
 def check_subcommands() -> CheckResult:
+    """Check subcommands."""
     nai = importlib.import_module("nai")
     cli = importlib.import_module("nai.cli")
     errors = getattr(nai, "_SUBCOMMAND_IMPORT_ERRORS", {})
@@ -102,6 +113,7 @@ def check_subcommands() -> CheckResult:
 
 
 def check_handlers() -> CheckResult:
+    """Check handlers."""
     registry_mod = importlib.import_module("nai.sched.registry")
     spec_plugin = importlib.import_module("nai.spec.plugin")
     build_plugin = importlib.import_module("nai.build.plugin")
@@ -109,10 +121,12 @@ def check_handlers() -> CheckResult:
 
     class _Runner:
         def __init__(self):
+            """Initialize the object."""
             self.registry = registry_mod.HandlerRegistry()
             self.planners: list[Callable] = []
 
         def register_planner(self, fn: Callable) -> None:
+            """Register planner."""
             self.planners.append(fn)
 
     runner = _Runner()
@@ -151,6 +165,7 @@ def _planner_probe(name: str, planner: Callable) -> CheckResult:
 
 
 def check_planner_api() -> CheckResult:
+    """Check planner api."""
     spec_plugin = importlib.import_module("nai.spec.plugin")
     build_plugin = importlib.import_module("nai.build.plugin")
     results = [
@@ -163,6 +178,7 @@ def check_planner_api() -> CheckResult:
 
 
 def check_artifact_kinds() -> CheckResult:
+    """Check artifact kinds."""
     store_mod = importlib.import_module("nai.store.store")
     root = _pkg_root()
     invalid: list[str] = []
@@ -192,6 +208,7 @@ def check_artifact_kinds() -> CheckResult:
 
 
 def check_schemas() -> CheckResult:
+    """Check schemas."""
     schemas_mod = importlib.import_module("nai.spec.schemas")
     expected = dict(schemas_mod.SCHEMAS)
     expected["contract"] = {
@@ -211,6 +228,7 @@ def check_schemas() -> CheckResult:
 
 
 def check_package_data() -> CheckResult:
+    """Check package data."""
     root = _pkg_root()
     missing = [pattern for pattern in PACKAGE_GLOBS if not any(root.glob(pattern))]
     tmpl = root / "web" / "templates"
@@ -225,6 +243,7 @@ def check_package_data() -> CheckResult:
 
 
 def check_store() -> CheckResult:
+    """Check store."""
     store_mod = importlib.import_module("nai.store.store")
     try:
         with tempfile.TemporaryDirectory(prefix="nai-doctor-") as tmp:
@@ -240,6 +259,7 @@ def check_store() -> CheckResult:
 
 
 def check_tool_registry() -> CheckResult:
+    """Check tool registry."""
     tools = importlib.import_module("nai.tools")
     registry = tools.get_registry()
     names = set(registry.get_all())
@@ -276,6 +296,7 @@ def run_checks() -> list[CheckResult]:
 
 
 def format_report(results: list[CheckResult]) -> str:
+    """Format report."""
     lines = ["nai doctor", "=" * 10]
     for result in results:
         mark = "OK  " if result.ok else "FAIL"
@@ -286,6 +307,7 @@ def format_report(results: list[CheckResult]) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """CLI entry point."""
     parser = argparse.ArgumentParser(prog="nai doctor", description="Check nai integration surfaces")
     parser.add_argument("--json", action="store_true", help="emit JSON instead of text")
     args = parser.parse_args(sys.argv[1:] if argv is None else argv)
