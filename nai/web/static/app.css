@@ -138,6 +138,9 @@ body {
 .node-scroll-panel { --node-panel-max: 360px; display: flex; flex-direction: column; max-height: var(--node-panel-max); overflow: hidden; }
 .node-scroll-panel > h2 { flex: none; }
 .node-panel-body { min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; padding-right: 0.35rem; }
+.approval-controls { flex-wrap: wrap; }
+.approval-controls input.small-input { width: 220px; }
+.node-panel-map { --node-panel-max: 360px; }
 .node-panel-spec { --node-panel-max: 520px; }
 .node-panel-details { --node-panel-max: 320px; }
 .node-panel-contract { --node-panel-max: 380px; }

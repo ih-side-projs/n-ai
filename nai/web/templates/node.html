@@ -1,6 +1,22 @@
 {% extends "base.html" %}
 {% block title %}{{ node.name }}{% endblock %}
 {% block content %}
+{% macro approval_controls(pid, nid, stage, label, csrf_token) %}
+<div class="button-group approval-controls">
+  <form method="post" action="/projects/{{ pid }}/nodes/{{ nid }}/approve" class="inline-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="stage" value="{{ stage }}">
+    <button type="submit" class="button success small">Approve {{ label }}</button>
+  </form>
+  <form method="post" action="/projects/{{ pid }}/nodes/{{ nid }}/reject" class="inline-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="stage" value="{{ stage }}">
+    <input type="text" name="note" placeholder="Reason for rejecting {{ label }}" required class="small-input">
+    <button type="submit" class="button danger small">Reject {{ label }}</button>
+  </form>
+</div>
+{% endmacro %}
+{% set component_map = project.settings.get('component_map') or (node.contract if node.parent_id is none and node.contract and 'shared_entities' in node.contract else {}) %}
 <div class="breadcrumbs"><a href="/">Projects</a><span>/</span><a href="/projects/{{ project.id }}">{{ project.name }}</a><span>/</span>{{ node.name }}</div>
 <div class="page-heading"><div><p class="eyebrow">NODE · {{ node.kind }} · {{ phase_label|upper }} PHASE</p><h1>{{ node.name }}</h1><p class="muted">{{ node.id }}</p></div><span class="phase-badge phase-{{ phase }}">{{ phase_label }}</span><span class="status status-{{ node.status }}">{{ node.status }}</span></div>
 <div class="phase-banner phase-banner-{{ phase }}">
@@ -11,9 +27,33 @@
   {% endif %}
 </div>
 <div class="content-grid">
-  <section class="panel span-two node-scroll-panel node-panel-spec"><h2>Specification</h2><div class="node-panel-body markdown-body">{{ spec_html|safe }}</div></section>
+  {% if node.parent_id is none and component_map %}
+  <section class="panel span-two node-scroll-panel node-panel-map">
+    <div class="section-heading"><h2>Component map</h2>
+      {% if node.status in ('draft', 'awaiting_approval', 'approved') and approval_stages.get('component-map') != 'approved' %}
+        {{ approval_controls(project.id, node.id, 'component-map', 'map', csrf_token) }}
+      {% endif %}
+    </div>
+    <div class="node-panel-body"><pre class="code-block"><code>{{ component_map|pretty_json }}</code></pre></div>
+  </section>
+  {% endif %}
+  <section class="panel span-two node-scroll-panel node-panel-spec">
+    <div class="section-heading"><h2>Specification</h2>
+      {% if node.status in ('draft', 'awaiting_approval', 'approved') and node.kind != 'system' and node.spec_text and approval_stages.get('component-spec') != 'approved' %}
+        {{ approval_controls(project.id, node.id, 'component-spec', 'spec', csrf_token) }}
+      {% endif %}
+    </div>
+    <div class="node-panel-body markdown-body">{{ spec_html|safe }}</div>
+  </section>
   <aside class="panel node-scroll-panel node-panel-details"><h2>Node details</h2><div class="node-panel-body"><dl class="compact-dl"><div><dt>Objective</dt><dd>{{ node.objective or '—' }}</dd></div><div><dt>Attempts</dt><dd>{{ node.attempts }}</dd></div><div><dt>Test command</dt><dd><code>{{ node.test_command or '—' }}</code></dd></div><div><dt>Content hash</dt><dd><code class="hash">{{ node.content_hash or '—' }}</code></dd></div><div><dt>Built hash</dt><dd><code class="hash">{{ node.built_hash or '—' }}</code></dd></div><div><dt>Dependencies</dt><dd>{% for dep in node.depends_on %}<code>{{ dep }}</code>{% else %}—{% endfor %}</dd></div></dl></div></aside>
-  <section class="panel span-two node-scroll-panel node-panel-contract"><h2>Contract</h2><div class="node-panel-body"><pre class="code-block"><code>{{ node.contract|pretty_json }}</code></pre></div></section>
+  <section class="panel span-two node-scroll-panel node-panel-contract">
+    <div class="section-heading"><h2>Contract</h2>
+      {% if node.contract and node.status in ('draft', 'awaiting_approval', 'approved') and approval_stages.get('interfaces') != 'approved' %}
+        {{ approval_controls(project.id, node.id, 'interfaces', 'contract', csrf_token) }}
+      {% endif %}
+    </div>
+    <div class="node-panel-body"><pre class="code-block"><code>{{ node.contract|pretty_json }}</code></pre></div>
+  </section>
   <section class="panel span-two node-scroll-panel node-panel-traceability"><h2>Requirements and Test Traceability</h2>
     <div class="node-panel-body">
       {% if traceability %}<div class="table-wrap"><table><thead><tr><th>Requirement</th><th>Test file(s)</th><th>Last result</th><th>Frozen hash</th></tr></thead><tbody>
@@ -27,28 +67,7 @@
 <aside class="panel node-actions">
   <h2>Actions</h2>
   <a class="button primary" href="/projects/{{ project.id }}/nodes/{{ node.id }}/edit">Edit spec</a>
-  {% if node.status in ('draft', 'awaiting_approval') %}
-    <form method="post" action="/projects/{{ project.id }}/nodes/{{ node.id }}/approve" class="inline-form">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      <select name="stage" aria-label="Approval stage">
-        <option value="interfaces" {% if node.contract %}selected{% endif %}>interfaces</option>
-        <option value="component-spec" {% if not node.contract %}selected{% endif %}>component-spec</option>
-        <option value="component-map">component-map</option>
-      </select>
-      <input type="text" name="note" placeholder="Approval note (optional)">
-      <button type="submit" class="button success">Approve</button>
-    </form>
-    <form method="post" action="/projects/{{ project.id }}/nodes/{{ node.id }}/reject" class="inline-form">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      <select name="stage" aria-label="Approval stage">
-        <option value="interfaces" {% if node.contract %}selected{% endif %}>interfaces</option>
-        <option value="component-spec" {% if not node.contract %}selected{% endif %}>component-spec</option>
-        <option value="component-map">component-map</option>
-      </select>
-      <input type="text" name="note" placeholder="Rejection reason (required)" required>
-      <button type="submit" class="button danger">Reject</button>
-    </form>
-  {% endif %}
+  <p class="tiny muted">Approve or reject each artifact using the buttons in its section above.</p>
   {% if node.status in ('failed', 'escalated') %}
     <form method="post" action="/projects/{{ project.id }}/nodes/{{ node.id }}/retry" class="inline-form">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">

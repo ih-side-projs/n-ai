@@ -287,8 +287,11 @@ def create_app(
         for requirement in requirements:
             matched = [test for test in tests if requirement["id"] in test.get("requirement_ids", [])]
             matrix.append({"requirement": requirement, "tests": matched})
-        return {"requirements": requirements, "tests": tests, "jobs": jobs,
-                "artifacts": artifacts, "approvals": approvals, "traceability": matrix}
+        return {
+            "requirements": requirements, "tests": tests, "jobs": jobs,
+            "artifacts": artifacts, "approvals": approvals, "traceability": matrix,
+            "approval_stages": {a.get("stage"): a.get("decision") for a in approvals},
+        }
 
     @app.get("/healthz")
     def healthz():

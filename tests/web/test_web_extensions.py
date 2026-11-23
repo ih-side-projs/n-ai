@@ -479,3 +479,34 @@ async def test_node_page_sections_have_scoped_scroll(client, initialized_store):
     ):
         assert marker in response.text
 
+
+
+async def test_node_page_has_section_specific_approval_controls(client, initialized_store):
+    pid = initialized_store.conn.execute("SELECT id FROM projects LIMIT 1").fetchone()[0]
+    root = initialized_store.list_nodes(pid, parent_id=None)[0]
+    settings = dict(initialized_store.get_project(pid)["settings"] or {})
+    settings["component_map"] = {"components": [{"name": "child", "objective": "A component", "depends_on": []}]}
+    with Store(initialized_store.db_path, read_only=False) as writable:
+        writable.update_project(pid, settings=settings)
+        writable.update_node_spec(root["id"], "# Root spec")
+        writable.update_node_contract(root["id"], {"entities": [], "components": [], "scenarios": []})
+        if writable.get_node(root["id"])["status"] == "draft":
+            writable.transition_node_status(root["id"], "awaiting_approval")
+
+    response = await client.get(f"/projects/{pid}/nodes/{root['id']}")
+    assert response.status_code == 200
+    assert "Approve map" in response.text
+    assert "Approve contract" in response.text
+    assert 'value="component-map"' in response.text
+    assert 'value="interfaces"' in response.text
+    assert 'aria-label="Approval stage"' not in response.text
+
+    children = initialized_store.list_nodes(pid, parent_id=root["id"])
+    if children:
+        child = children[0]
+        with Store(initialized_store.db_path, read_only=False) as writable:
+            writable.update_node_spec(child["id"], "# Child spec")
+        child_page = await client.get(f"/projects/{pid}/nodes/{child['id']}")
+        assert "Approve spec" in child_page.text
+        assert 'value="component-spec"' in child_page.text
+

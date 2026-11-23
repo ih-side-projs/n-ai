@@ -243,16 +243,17 @@ class CommandProcessor:
                            data={"stage": stage, "decision": decision, "note": note})
             if node is None:
                 continue
-            if stage in ("component-map", "interfaces", "component-spec") and node["status"] == "awaiting_approval":
+            if stage in ("component-map", "interfaces", "component-spec"):
                 if decision == "approved":
-                    self._move(t, "approved", note or f"owner approved {stage}")
-                    base = self.r.tracker.reset(t, int(node.get("attempts") or 0))
-                    self.r.store.record_event(
-                        pid, "node.budget_reset_on_approval", "Owner approval grants a fresh budget",
-                        node_id=t, data={"stage": stage, "attempts_base": base.attempts,
-                                         "tokens_base": base.tokens, "seconds_base": base.seconds},
-                    )
-                else:
+                    if node["status"] == "awaiting_approval":
+                        self._move(t, "approved", note or f"owner approved {stage}")
+                        base = self.r.tracker.reset(t, int(node.get("attempts") or 0))
+                        self.r.store.record_event(
+                            pid, "node.budget_reset_on_approval", "Owner approval grants a fresh budget",
+                            node_id=t, data={"stage": stage, "attempts_base": base.attempts,
+                                             "tokens_base": base.tokens, "seconds_base": base.seconds},
+                        )
+                elif node["status"] in ("awaiting_approval", "approved"):
                     self._move(t, "stale", note or "owner rejected")
                     self._move(t, "draft", note or "owner rejected")
             elif stage == "escalation" and decision == "approved" and node["status"] in ("escalated", "blocked"):

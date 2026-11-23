@@ -386,3 +386,18 @@ def test_SCH6_intake_answers_and_begin_design(store, pid, tmp_path):
     assert settings["clarified"] is True
     assert store.events_of("project.design_forced")
 
+
+
+def test_interfaces_approval_can_follow_component_map(store, pid, tmp_path):
+    root = store.create_node(pid, "root", "system")
+    store.transition_node_status(root, "awaiting_approval")
+    store.transition_node_status(root, "approved")
+    r = make_runner(store, None, tmp_path)
+
+    store.enqueue_command(pid, "approve", node_id=root, payload={"stage": "interfaces"})
+    r.step()
+
+    approvals = store.list_approvals(root)
+    assert any(a["stage"] == "interfaces" and a["decision"] == "approved" for a in approvals)
+    assert store.get_node(root)["status"] in ("approved", "ready")
+

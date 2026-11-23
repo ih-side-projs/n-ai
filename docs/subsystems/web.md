@@ -44,7 +44,9 @@ Open <http://127.0.0.1:8080>. OpenAPI docs are at `/api/docs`.
   Next step panel with a direct link to the right follow-up screen.
 - Reasoner/coder model ids are chosen from the live llama-swap model catalogue,
   with a fallback option for a configured id that is not currently listed.
-- Approve/reject node specs (records an approval, transitions status).
+- Approve/reject artifacts where they are displayed: component map, specification,
+  and contract. Each section posts its own fixed approval stage, so there is no
+  ambiguous stage dropdown. The Actions panel is for retry/re-run/mark-stale.
 - Retry failed nodes, re-run a stage, mark a node stale.
 - Pause, resume, cancel a project or job, reorder node priorities.
 - Archive/restore projects; archived projects are hidden by default and visible via
