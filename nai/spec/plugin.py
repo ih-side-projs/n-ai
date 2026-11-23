@@ -102,17 +102,21 @@ def plan(pc: Any) -> None:
                 except Exception:
                     pass
         elif status == "approved":
-            if not contract:
-                pc.store.create_job(pid, "interfaces", "reasoner", node_id=nid)
-            elif not spec_text:
+            has_children = bool(pc.store.list_nodes(pid, parent_id=nid))
+            if not spec_text:
                 pc.store.create_job(pid, "component_spec", "reasoner", node_id=nid)
-            else:
+            elif has_children and not contract:
+                pc.store.create_job(pid, "interfaces", "reasoner", node_id=nid)
+            elif spec_text:
                 pc.store.create_job(pid, "lint", "reasoner", node_id=nid,
                                     input_ref={"round": 0})
         elif status == "ready":
-            if contract and not spec_text:
+            has_children = bool(pc.store.list_nodes(pid, parent_id=nid))
+            if not spec_text:
                 pc.store.create_job(pid, "component_spec", "reasoner", node_id=nid)
-            elif contract and spec_text:
+            elif has_children and not contract:
+                pc.store.create_job(pid, "interfaces", "reasoner", node_id=nid)
+            elif spec_text:
                 pc.store.create_job(pid, "lint", "reasoner", node_id=nid,
                                     input_ref={"round": 0})
         elif status == "stale":

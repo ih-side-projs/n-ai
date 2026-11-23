@@ -1053,8 +1053,7 @@ def create_app(
                 raise HTTPException(status_code=404, detail="Node not found")
         finally:
             store.close()
-        _enqueue_command(project_id, "approve", node_id,
-                         {"stage": stage, "note": note, "cascade": stage != "escalation"})
+        _enqueue_command(project_id, "approve", node_id, {"stage": stage, "note": note})
         return RedirectResponse(url=f"/projects/{project_id}/nodes/{node_id}", status_code=303)
 
     @app.post("/projects/{project_id}/nodes/{node_id}/reject")

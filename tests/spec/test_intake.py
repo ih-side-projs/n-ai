@@ -177,3 +177,18 @@ def test_planner_moves_written_spec_to_review_instead_of_requeueing():
     assert store.created_jobs == []
     assert store.get_node(child["id"])["status"] == "awaiting_approval"
 
+
+def test_approved_child_without_children_does_not_get_interfaces_job():
+    store = _Store()
+    store.nodes[0]["contract"] = {"components": []}
+    child = {"id": "child", "name": "child", "status": "approved", "parent_id": "root",
+             "spec_text": "# done", "contract": {}, "kind": "component"}
+    store.nodes.append(child)
+    project = {"id": "p", "settings": {"intake_complete": True}}
+    pc = SimpleNamespace(store=store, project=project, nodes=[store.nodes[0], child], jobs=[])
+    pc.active_jobs = lambda node_id: []
+
+    spec_plugin.plan(pc)
+
+    assert "interfaces" not in store.created_jobs
+

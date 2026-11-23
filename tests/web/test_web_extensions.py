@@ -236,6 +236,7 @@ class TestCommandQueueRouting:
         assert cmd["action"] == "approve" and cmd["node_id"] == nid
         payload = json.loads(cmd["payload_json"])
         assert payload["stage"] == "interfaces"
+        assert "cascade" not in payload
         # Directly nothing changed: only the command row was inserted
         assert initialized_store.conn.execute("SELECT COUNT(*) FROM approvals").fetchone()[0] == before_approvals
         assert initialized_store.get_node(nid)["status"] == before_status

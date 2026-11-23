@@ -233,9 +233,9 @@ class CommandProcessor:
         if stage not in STAGES:
             return f"{decision} needs payload.stage, one of {', '.join(STAGES)}"
         s = self.r.store
+        # Approvals are always node-and-artifact scoped. Cascading an approval to
+        # children silently approves artifacts the owner never reviewed.
         targets = [nid]
-        if payload.get("cascade"):
-            targets += [k["id"] for k in s.list_nodes(pid, parent_id=nid) if k["status"] == "awaiting_approval"]
         for t in targets:
             s.add_approval(t, stage, decision, note=note)
             node = s.get_node(t)

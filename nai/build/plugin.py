@@ -287,8 +287,12 @@ def plan(pc: Any) -> None:
                 store.transition_node_status(nid, "escalated", note="Failure ladder exhausted (BLD-9)")
             continue
 
+        # A component with no children is a leaf for build purposes. Decompose
+        # currently emits leaf nodes with kind="component".
+        effective_kind = "leaf" if kind == "component" and not store.list_nodes(project_id, parent_id=nid) else kind
+
         # 3. Optional review job for done leaf nodes (BLD-11)
-        if status == "done" and kind == "leaf" and enable_review:
+        if status == "done" and effective_kind == "leaf" and enable_review:
             if not _has_succeeded_for_hash(node_jobs, "review", None):
                 store.create_job(project_id, "review", "reasoner", node_id=nid)
             continue
@@ -296,7 +300,7 @@ def plan(pc: Any) -> None:
         # 4. Normal build progression for ready/running leaf or integration nodes
         if status not in ("ready", "running"):
             continue
-        if kind not in ("leaf", "integration"):
+        if effective_kind not in ("leaf", "integration"):
             continue
 
         chash = node.get("content_hash")
@@ -305,7 +309,7 @@ def plan(pc: Any) -> None:
             store.create_job(project_id, "verify", "coder", node_id=nid)
             continue
 
-        if kind == "leaf":
+        if effective_kind == "leaf":
             if not _has_succeeded_for_hash(node_jobs, "contract_stub", chash):
                 store.create_job(project_id, "contract_stub", "coder", node_id=nid)
                 continue
@@ -323,7 +327,7 @@ def plan(pc: Any) -> None:
             else:
                 store.create_job(project_id, "implement", "coder", node_id=nid, attempt=1)
 
-        elif kind == "integration":
+        elif effective_kind == "integration":
             test_records = list(store.list_test_records(nid) or [])
             if not test_records:
                 store.create_job(project_id, "author_tests", "reasoner", node_id=nid)

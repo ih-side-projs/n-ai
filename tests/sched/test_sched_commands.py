@@ -249,15 +249,14 @@ def test_SCH6_approve_component_spec_moves_awaiting_node_to_approved(store, pid,
     assert (a["stage"], a["decision"], a["note"]) == ("component-spec", "approved", "lgtm")
 
 
-def test_SCH6_approve_cascade_approves_each_awaiting_child(store, pid, tmp_path):
+def test_SCH6_approve_does_not_approve_children(store, pid, tmp_path):
     parent = make_node(store, pid, "p", "draft", kind="component")
     kids = [make_node(store, pid, f"k{i}", "awaiting_approval", parent_id=parent) for i in range(2)]
-    draft_kid = make_node(store, pid, "d", "draft", parent_id=parent)
     r = make_runner(store, None, tmp_path)
     store.enqueue_command(pid, "approve", node_id=parent, payload={"stage": "component-spec", "cascade": True})
     r.step()
-    assert [store.get_node(k)["status"] for k in kids] == ["approved", "approved"] and store.get_node(draft_kid)["status"] == "draft"   # parent contract not approved: not promoted
-    assert all(store.list_approvals(k) for k in kids)
+    assert [store.get_node(k)["status"] for k in kids] == ["awaiting_approval", "awaiting_approval"]
+    assert not any(store.list_approvals(k) for k in kids)
 
 
 def test_SCH6_other_stages_only_record_the_approval(store, pid, tmp_path):
@@ -400,4 +399,21 @@ def test_interfaces_approval_can_follow_component_map(store, pid, tmp_path):
     approvals = store.list_approvals(root)
     assert any(a["stage"] == "interfaces" and a["decision"] == "approved" for a in approvals)
     assert store.get_node(root)["status"] in ("approved", "ready")
+
+
+def test_approval_never_cascades_to_children(store, pid, tmp_path):
+    root = store.create_node(pid, "root", "system")
+    child = store.create_node(pid, "child", "component", parent_id=root)
+    store.transition_node_status(root, "awaiting_approval")
+    store.transition_node_status(child, "awaiting_approval")
+    r = make_runner(store, None, tmp_path)
+
+    store.enqueue_command(
+        pid, "approve", node_id=root,
+        payload={"stage": "component-map", "note": "map only", "cascade": True},
+    )
+    r.step()
+
+    assert store.get_node(child)["status"] == "awaiting_approval"
+    assert all(a["stage"] != "component-map" for a in store.list_approvals(child))
 
