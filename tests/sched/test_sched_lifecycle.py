@@ -32,7 +32,7 @@ def test_SCH7_running_jobs_are_requeued_and_run_again_after_a_crash(store, pid, 
     ev = store.events_of("runner.recovered_job")
     assert len(ev) == 1 and ev[0]["job_id"] == j and ev[0]["level"] == "warning"
     assert store.jobs[j]["status"] == "succeeded" and store.jobs[j]["started_at"] != "2026-11-16T00:00:00+00:00"
-    assert store.events_of("runner.started")[0]["data"] == {"requeued_jobs": 1, "orphan_nodes": 0, "invalid_roots": 0}
+    assert store.events_of("runner.started")[0]["data"] == {"requeued_jobs": 1, "orphan_nodes": 0, "invalid_roots": 0, "reconciled_components": 0}
 
 
 def test_SCH7_orphaned_running_nodes_are_reported_and_repaired(store, pid, tmp_path):
@@ -41,7 +41,7 @@ def test_SCH7_orphaned_running_nodes_are_reported_and_repaired(store, pid, tmp_p
     store.create_job(pid, "verify", "coder", node_id=covered)
     r = make_runner(store, None, tmp_path)
     rep = r.recover()
-    assert rep == {"requeued_jobs": 0, "orphan_nodes": 2, "invalid_roots": 0}
+    assert rep == {"requeued_jobs": 0, "orphan_nodes": 2, "invalid_roots": 0, "reconciled_components": 0}
     assert {e["node_id"] for e in store.events_of("runner.orphan_node")} == {a, b}
     # Orphans are repaired to `ready` so the planner can re-evaluate them.
     assert store.get_node(a)["status"] == "ready"

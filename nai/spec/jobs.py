@@ -37,6 +37,51 @@ def _make_job_result(ok: bool, **kwargs: Any) -> Any:
     except Exception:
         return {"ok": ok, **kwargs}
 
+def ensure_component_children(store: Any, project_id: str, root_id: str,
+                              component_map: dict[str, Any]) -> tuple[list[str], list[str]]:
+    """Create missing child nodes from a component map, resolving names to node IDs.
+
+    Existing nodes are never modified or re-created. Returns `(created_ids,
+    unresolved_names)`; unresolved components need a corrected component map.
+    """
+    components = list(component_map.get("components") or [])
+    existing = store.list_nodes(project_id, parent_id=root_id) or []
+    by_name = {str(n.get("name")): str(n["id"]) for n in existing if n.get("name")}
+    created: list[str] = []
+    pending = [c for c in components if str(c.get("name") or "") and str(c.get("name")) not in by_name]
+
+    for _ in range(len(pending) + 1):
+        deferred = []
+        progress = False
+        for component in pending:
+            name = str(component.get("name") or "")
+            dep_ids = []
+            unresolved = False
+            for dep in component.get("depends_on") or []:
+                dep_name = dep["name"] if isinstance(dep, dict) else dep
+                node_id = by_name.get(str(dep_name))
+                if not node_id:
+                    unresolved = True
+                    break
+                dep_ids.append(node_id)
+            if unresolved:
+                deferred.append(component)
+                continue
+            node_id = store.create_node(
+                project_id, name, "component",
+                parent_id=root_id,
+                objective=str(component.get("objective") or ""),
+                depends_on=tuple(dep_ids),
+            )
+            by_name[name] = str(node_id)
+            created.append(str(node_id))
+            progress = True
+        pending = deferred
+        if not pending or not progress:
+            break
+    return created, [str(c.get("name")) for c in pending]
+
+
 def _workspace_root(ctx: Any) -> Path:
     if ctx.ws is not None and getattr(ctx.ws, "root", None) is not None:
         return Path(ctx.ws.root)
@@ -154,16 +199,10 @@ def handle_decompose(ctx: Any) -> Any:
     settings["component_map"] = cm
     ctx.store.update_project(project["id"], settings=settings)
     # Create a child node for each component so the spec tree is recursable (stage 11).
-    existing = {c["name"] for c in ctx.store.list_nodes(project["id"], parent_id=node["id"])}
-    for child in cm["components"]:
-        name = str(child.get("name") or "").strip()
-        if not name or name in existing:
-            continue
-        ctx.store.create_node(
-            project["id"], name, "component", parent_id=node["id"],
-            objective=str(child.get("objective") or ""),
-            depends_on=list(child.get("depends_on") or []),
-        )
+    _created, unresolved = ensure_component_children(ctx.store, project["id"], node["id"], cm)
+    if unresolved:
+        ctx.event("spec.decompose_unresolved", f"Could not resolve dependencies for: {', '.join(unresolved)}",
+                  level="warning", data={"components": unresolved})
     ctx.artifact("report", json.dumps(cm, indent=2), f"component_map_{node['name']}.json")
     ctx.event("spec.decompose_done", f"Generated component map with {len(cm['components'])} components", level="info", data={"component_count": len(cm["components"])})
     return _make_job_result(True, component_map=cm, prompt_id=get_prompt(DECOMPOSE).id)
@@ -286,6 +325,8 @@ def handle_component_spec(ctx: Any) -> Any:
     requirements = [{"id": r["id"], "text": r["text"], "testable": r.get("testable", True)} for r in result["requirements"]]
     ctx.store.replace_requirements(node["id"], requirements)
     ctx.artifact("spec", spec_markdown, f"SPEC-{node['name']}.md")
+    if node.get("status") == "draft":
+        ctx.store.transition_node_status(node["id"], "awaiting_approval", note="component spec ready for review")
     ctx.event("spec.component_spec_done", f"Generated spec for {node['name']} with {len(requirements)} requirements", level="info", data={"requirement_count": len(requirements)})
     return _make_job_result(True, spec=spec_markdown, requirements=requirements, prompt_id=get_prompt(COMPONENT_SPEC).id)
 

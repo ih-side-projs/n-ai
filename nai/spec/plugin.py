@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 from .jobs import (
+    ensure_component_children,
     handle_check_interfaces,
     handle_clarify,
     handle_component_spec,
@@ -51,6 +52,18 @@ def plan(pc: Any) -> None:
                 pc.store.create_job(pid, "intake", "reasoner", node_id=roots[0]["id"])
         return
 
+    # Repair older projects where a decompose failure stopped after the first
+    # dependency-free children. This only creates missing nodes; existing work
+    # and spec text are left untouched.
+    if roots:
+        component_map = dict(settings.get("component_map") or {})
+        if not component_map.get("components"):
+            root_contract = roots[0].get("contract") or {}
+            if "shared_entities" in root_contract or "external_inputs" in root_contract:
+                component_map = root_contract
+        if component_map.get("components"):
+            ensure_component_children(pc.store, pid, roots[0]["id"], component_map)
+
     for node in pc.nodes:
         nid = node["id"]
         if pc.active_jobs(nid):
@@ -79,8 +92,15 @@ def plan(pc: Any) -> None:
 
         if status == "draft":
             parent = pc.store.get_node(parent_id) or {}
-            if parent.get("contract"):
+            if parent.get("contract") and not spec_text:
                 pc.store.create_job(pid, "component_spec", "reasoner", node_id=nid)
+            elif spec_text:
+                # Spec already written; move to review instead of re-queueing.
+                try:
+                    pc.store.transition_node_status(nid, "awaiting_approval", note="spec ready for review")
+                    node["status"] = "awaiting_approval"
+                except Exception:
+                    pass
         elif status == "approved":
             if not contract:
                 pc.store.create_job(pid, "interfaces", "reasoner", node_id=nid)

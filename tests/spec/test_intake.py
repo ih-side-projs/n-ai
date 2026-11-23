@@ -12,12 +12,28 @@ class _Store:
         self.settings = {}
         self.created_jobs = []
         self.spec_text = None
+        self.nodes = [{"id": "root", "name": "root", "status": "draft", "parent_id": None}]
+        self._seq = 0
 
     def update_project(self, project_id, *, settings):
         self.settings = settings
 
     def list_nodes(self, project_id, parent_id=None):
-        return [{"id": "root", "name": "root", "status": "draft", "parent_id": None}] if parent_id is None else []
+        return [n for n in self.nodes if n.get("parent_id") == parent_id]
+
+    def create_node(self, project_id, name, kind, *, parent_id=None, objective="", depends_on=()):
+        self._seq += 1
+        node = {"id": f"n{self._seq}", "name": name, "kind": kind, "parent_id": parent_id,
+                "status": "draft", "objective": objective, "depends_on": list(depends_on)}
+        self.nodes.append(node)
+        return node["id"]
+
+    def transition_node_status(self, node_id, status, note=""):
+        node = next(n for n in self.nodes if n["id"] == node_id)
+        node["status"] = status
+
+    def get_node(self, node_id):
+        return next((n for n in self.nodes if n["id"] == node_id), None)
 
     def update_node_spec(self, node_id, text):
         self.spec_text = text
@@ -128,3 +144,36 @@ def test_planner_resumes_spec_pipeline_after_intake_completes():
     pc = _PC(project)
     spec_plugin.plan(pc)
     assert pc.store.created_jobs == ["decompose"]
+
+
+def test_ensure_component_children_resolves_names_to_node_ids():
+    store = _Store()
+    component_map = {"components": [
+        {"name": "a", "objective": "A", "depends_on": []},
+        {"name": "b", "objective": "B", "depends_on": ["a"]},
+        {"name": "c", "objective": "C", "depends_on": ["b"]},
+    ]}
+    created, unresolved = spec_jobs.ensure_component_children(store, "p", "root", component_map)
+    assert unresolved == []
+    assert len(created) == 3
+    children = store.list_nodes("p", parent_id="root")
+    by_name = {n["name"]: n for n in children}
+    assert by_name["b"]["depends_on"] == [by_name["a"]["id"]]
+    assert by_name["c"]["depends_on"] == [by_name["b"]["id"]]
+
+
+def test_planner_moves_written_spec_to_review_instead_of_requeueing():
+    store = _Store()
+    child = {"id": "child", "name": "child", "status": "draft", "parent_id": "root",
+             "spec_text": "# done", "contract": {}, "kind": "component"}
+    store.nodes.append(child)
+    project = {"id": "p", "settings": {"intake_complete": True}}
+    store.nodes[0]["contract"] = {"components": []}
+    pc = SimpleNamespace(store=store, project=project, nodes=[store.nodes[0], child], jobs=[])
+    pc.active_jobs = lambda node_id: []
+
+    spec_plugin.plan(pc)
+
+    assert store.created_jobs == []
+    assert store.get_node(child["id"])["status"] == "awaiting_approval"
+

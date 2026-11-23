@@ -98,8 +98,8 @@
     <div class="link-stack"><a href="/projects/{{ project.id }}/logs">Live log →</a><a href="/projects/{{ project.id }}/metrics">Metrics →</a><a href="/projects/{{ project.id }}/artifacts">Artifacts →</a><a href="/projects/{{ project.id }}/settings">Settings →</a></div>
     <h2>Controls</h2>
     <div class="button-group">
-      <form method="post" action="/projects/{{ project.id }}/control/pause" class="inline-form control-form"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit" class="button secondary" {% if runner.status == 'paused' %}disabled{% endif %}>Pause</button></form>
-      <form method="post" action="/projects/{{ project.id }}/control/resume" class="inline-form control-form"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit" class="button secondary" {% if runner.status != 'paused' %}disabled{% endif %}>Resume</button></form>
+      <form method="post" action="/projects/{{ project.id }}/control/pause" class="inline-form control-form"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit" class="button secondary" {% if project.status == 'paused' %}disabled{% endif %}>Pause</button></form>
+      <form method="post" action="/projects/{{ project.id }}/control/resume" class="inline-form control-form"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit" class="button secondary" {% if project.status != 'paused' %}disabled{% endif %}>Resume</button></form>
       <form method="post" action="/projects/{{ project.id }}/control/cancel" class="inline-form control-form" data-confirm="Cancel all work on this project?"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit" class="button danger">Cancel</button></form>
     </div>
   </aside>

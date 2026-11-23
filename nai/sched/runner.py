@@ -662,11 +662,62 @@ class Runner:
 
     def recover(self) -> dict:
         """SCH-7 / X4: jobs left `running` by a crash go back to `queued`; the report goes to events."""
-        report = {"requeued_jobs": 0, "orphan_nodes": 0, "invalid_roots": 0}
+        report = {"requeued_jobs": 0, "orphan_nodes": 0, "invalid_roots": 0, "reconciled_components": 0}
         for p in self.store.list_projects():
             if p.get("status") == "archived":
                 continue
             pid = p["id"]
+
+            # Repair older design projects whose component map contains nodes
+            # that were never created because dependency names were treated as
+            # node IDs. Existing nodes and spec text are never reset.
+            try:
+                from ..spec.jobs import ensure_component_children
+                settings = as_obj(p.get("settings"), {}) or {}
+                roots = self.store.list_nodes(pid, parent_id=None) or []
+                component_map = dict(settings.get("component_map") or {})
+                if roots and not component_map.get("components"):
+                    root_contract = roots[0].get("contract") or {}
+                    if "shared_entities" in root_contract or "external_inputs" in root_contract:
+                        component_map = root_contract
+                if roots and component_map.get("components"):
+                    created, unresolved = ensure_component_children(
+                        self.store, pid, roots[0]["id"], component_map,
+                    )
+                    if created:
+                        report["reconciled_components"] += len(created)
+                        self._event(pid, "runner.reconciled_components",
+                                    f"Created {len(created)} missing component nodes from the stored component map",
+                                    node_id=roots[0]["id"], level="warning")
+                    if unresolved:
+                        self._event(pid, "runner.unresolved_components",
+                                    f"Unresolved component dependencies: {', '.join(unresolved)}",
+                                    node_id=roots[0]["id"], level="warning")
+
+                for n in walk_nodes(self.store, pid):
+                    if n.get("status") != "draft" or not n.get("spec_text"):
+                        continue
+                    for j in self.store.list_jobs(pid, status="queued", limit=5000):
+                        if j.get("node_id") == n["id"] and j.get("kind") == "component_spec":
+                            self.store.update_job(
+                                j["id"], status="cancelled", ended_at=iso(self.clock.now()),
+                                error="superseded by completed spec; awaiting review",
+                            )
+                    self.store.transition_node_status(
+                        n["id"], "awaiting_approval", note="spec ready for owner review",
+                    )
+                    base = self.tracker.reset(n["id"], int(n.get("attempts") or 0))
+                    self._event(pid, "node.retry", "Exhausted design budget cleared by recovery",
+                                node_id=n["id"], level="warning",
+                                data={"attempts_base": base.attempts, "tokens_base": base.tokens,
+                                      "seconds_base": base.seconds})
+                    self._event(pid, "runner.spec_review_repaired",
+                                "Completed spec moved to review and its exhausted budget was cleared",
+                                node_id=n["id"], level="warning")
+            except Exception as exc:
+                self._event(pid, "runner.reconcile_error", f"design reconciliation failed: {type(exc).__name__}: {exc}",
+                            level="error")
+
             for j in self.store.list_jobs(pid, status="running", limit=5000):
                 # Mark as requeued so the next start does not burn another attempt.
                 ref = as_obj(j.get("input_ref"), {}) or {}
@@ -784,7 +835,8 @@ class Runner:
         bases: dict[str, Usage] = {}
         events = self.store.list_events(pid, limit=100000)
         for _i, e in sorted(enumerate(events), key=lambda t: (str(t[1].get("time") or ""), t[0])):
-            if e.get("type", e.get("event_type")) == "node.retry" and e.get("node_id"):
+            if (e.get("type", e.get("event_type")) in ("node.retry", "node.budget_reset_on_approval")
+                    and e.get("node_id")):
                 d = as_obj(e.get("data"), {}) or {}
                 bases[e["node_id"]] = Usage(int(d.get("attempts_base", 0)), int(d.get("tokens_base", 0)), float(d.get("seconds_base", 0.0)))
         self.tracker.load(self.store.list_jobs(pid, limit=1_000_000), bases)

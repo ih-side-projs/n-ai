@@ -419,6 +419,17 @@ class TestStructuredProjectIntake:
         assert any(a["kind"] == "spec" for a in artifacts)
         assert any(e["type"] == "project.spec_uploaded" for e in events)
 
+    async def test_pause_controls_follow_project_status(self, client, initialized_store):
+        pid = initialized_store.conn.execute("SELECT id FROM projects LIMIT 1").fetchone()[0]
+        with Store(initialized_store.db_path, read_only=False) as writable:
+            writable.update_project(pid, status="paused")
+
+        response = await client.get(f"/projects/{pid}")
+        assert response.status_code == 200
+        assert 'disabled>Pause</button>' in response.text
+        assert 'disabled>Resume</button>' not in response.text
+        assert '>Resume</button>' in response.text
+
 
     async def test_submitted_answers_render_read_only(self, client, initialized_store):
         pid = initialized_store.conn.execute("SELECT id FROM projects LIMIT 1").fetchone()[0]
