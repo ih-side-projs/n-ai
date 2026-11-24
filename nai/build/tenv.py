@@ -23,6 +23,7 @@ class TargetEnvError(RuntimeError):
 
 @dataclass(frozen=True)
 class TargetEnv:
+    language: str = "python"
     python_version: str = field(
         default_factory=lambda: f"{sys.version_info.major}.{sys.version_info.minor}"
     )
@@ -106,6 +107,7 @@ def parse_target_env(project: dict[str, Any], workspace_root: Path | None = None
             pkgs.append(ps)
 
     return TargetEnv(
+        language=str(settings.get("language") or "python"),
         python_version=str(cfg.get("python_version") or default_py),
         os_family=str(cfg.get("os_family") or default_os).lower(),
         packages=tuple(pkgs),
@@ -130,7 +132,7 @@ def format_env_block(tenv: TargetEnv) -> str:
     )
     return (
         "## Target Environment (TENV-4)\n"
-        f"- Language: Python {tenv.python_version}\n"
+        f"- Language: {tenv.language.capitalize()} {tenv.python_version}\n"
         f"- OS Family: {tenv.os_family}\n"
         f"- Pinned Packages:\n{pkg_lines}\n"
         "- Rule: Use ONLY the standard library and these pinned packages, written for these "
@@ -357,6 +359,21 @@ class TargetEnvManager:
             f"env PATH={shlex.quote(new_path)} PYTHONWARNINGS={shlex.quote(py_warn)} "
             f"{test_command}"
         )
+
+    def wrap_adapter_command(
+        self,
+        workspace_root: Path,
+        tenv: TargetEnv,
+        command: Any,
+    ) -> str:
+        """Wrap an adapter ``Command`` in the target environment.
+
+        The adapter owns the argv; this method only applies the Python venv and
+        warning-as-error policy the current pipeline already uses.  A
+        non-Python adapter would wrap its own commands instead.
+        """
+        argv = getattr(command, "argv", command)
+        return self.wrap_test_command(workspace_root, tenv, shlex.join(argv))
 
     def run_lint_gate(
         self,

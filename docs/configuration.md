@@ -93,6 +93,10 @@ The store's `projects.settings` JSON can override X9 limits for one project
 (`max_components_per_level`, `max_depth`, …), plus `target_env` and
 `budget_limit_tokens`. Project values override the TOML `[limits]` table.
 
+`settings.language` selects the [language adapter](subsystems/languages.md) and
+defaults to `python` (migration `0007_project_language.sql`). Unknown values
+raise `UnknownLanguageError` instead of falling back silently.
+
 ## Structured-output method (D9)
 
 `nai.spec.structured.call_structured_json()` tries, in order:

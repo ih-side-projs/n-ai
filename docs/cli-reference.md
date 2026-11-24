@@ -51,6 +51,20 @@ to the store). The web form can only choose roots listed in
 `NAI_OUTPUT_ROOTS`. Project files live at `<output-root>/<slug>/`; `.nai/`
 holds only the database, logs, artifacts and snapshots.
 
+## `nai project create` — Store-backed project
+
+```
+nai project create <name> [--brief TEXT|--brief-file FILE] [--output-dir DIR]
+                          [--db PATH] [--json]
+```
+
+Creates a project in the store with the deterministic layout
+(`<output-root>/<slug>/`, `.nai-project`, `.nai-manifest.json`). The output
+root follows the same precedence as `where`/`relocate`; `--brief -` reads the
+brief from stdin. Exported projects reconstruct their tree on import:
+`SPEC.md`, `contract.json`, `specs/<node-path>/SPEC.md`, source/test files and
+a fresh manifest.
+
 ## `nai service` — background service
 
 ```

@@ -2,17 +2,18 @@
 
 from __future__ import annotations
 
-import ast
 import hashlib
 import json
 import os
 import re
+import shlex
 import stat
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .. import layout, manifest, paths
+from .. import manifest, paths
+from ..langs import registry
 from .context_pack import assemble_context_pack
 from .escalation import raise_change_request
 from .prompts import get_prompt
@@ -23,14 +24,7 @@ from .structured import (
     StructuredOutputError,
     call_structured_json,
 )
-from .stubs import (
-    entities_rel_path,
-    generate_contract_stubs,
-    node_stub_rel_path,
-    project_package_name,
-    slugify_module,
-    validate_stub_imports,
-)
+from .stubs import node_stub_rel_path, project_package_name, slugify_module
 from .tenv import (
     TargetEnv,
     TargetEnvManager,
@@ -94,16 +88,29 @@ def _parent_contract(store: Any, node: dict[str, Any]) -> dict[str, Any] | None:
     return parent.get("contract") if parent else node.get("contract")
 
 
-def _safe_rel_test_path(raw_path: str, node: dict[str, Any]) -> str:
-    cleaned = raw_path.replace("\\", "/").lstrip("/")
-    parts = [p for p in cleaned.split("/") if p and p != "."]
-    if not parts or ".." in parts:
-        return layout.python_test_rel(node)
-    if parts[0] != "tests":
-        parts = ["tests", *parts]
-    if not parts[-1].endswith(".py"):
-        parts[-1] += ".py"
-    return "/".join(parts)
+def _safe_rel_test_path(raw_path: str, node: dict[str, Any], adapter: Any) -> str:
+    """Normalise a model-supplied test path through the language adapter."""
+    return adapter.normalize_test_path(raw_path, node)
+
+
+def _adapter_for(project: dict[str, Any]) -> Any:
+    """Return the language adapter selected by ``project.settings.language``."""
+    return registry.language_for(project)
+
+
+def _apply_env_overrides(
+    adapter: Any, project: dict[str, Any], workspace_root: Path, command: str
+) -> str:
+    """Prefix *command* with the adapter's environment overrides.
+
+    The previous code hard-coded ``PYTHONPATH=src``; the adapter supplies the
+    same mapping for Python.  Windows keeps the historical bare command.
+    """
+    overrides = adapter.env_overrides(project, workspace_root)
+    if not overrides or os.name == "nt":
+        return command
+    prefix = " ".join(f"{key}={shlex.quote(value)}" for key, value in overrides.items())
+    return f"{prefix} {command}"
 
 
 def _ensure_running(store: Any, node: dict[str, Any]) -> dict[str, Any]:
@@ -192,7 +199,8 @@ def handle_contract_stub(ctx: Any) -> Any:
     tenv_mgr.ensure_env(ws_root, tenv)
     py_exe = str(tenv_mgr.venv_python(ws_root, tenv))
 
-    stub_res = generate_contract_stubs(project, node, parent_contract)
+    adapter = _adapter_for(project)
+    stub_res = adapter.render_stub(project, node, parent_contract)
     writable = tuple(f.rel_path for f in stub_res.files)
     policy = _path_policy(writable=writable, readonly=("tests/**", ".nai/**"))
 
@@ -208,7 +216,7 @@ def handle_contract_stub(ctx: Any) -> Any:
         def _run(cmd: str) -> tuple[int, str]:
             return _unpack_cmd_result(ctx.ws.run_command(cmd))
 
-        ok, out = validate_stub_imports(ws_root, stub_res.module_import, _run, python_exe=py_exe)
+        ok, out = adapter.validate_stub(ws_root, stub_res.module_import, _run, executable=py_exe)
         if not ok:
             _fail_node(ctx.store, node["id"], f"Contract stub import failed: {out}")
             return _make_job_result(False, error=f"Stub import failed: {out}", output=out)
@@ -269,9 +277,10 @@ def handle_author_tests(ctx: Any) -> Any:
         requirements = [{"id": "R1", "text": node.get("objective") or node["name"], "testable": True}]
 
     prompt = get_prompt("author_tests")
+    adapter = _adapter_for(project)
     pkg = project_package_name(project)
     mod = slugify_module(node["name"])
-    default_test_path = layout.python_test_rel(node)
+    default_test_path = adapter.test_rel(project, node)
 
     # Never include implementation source; only spec, contract interfaces, and TENV-4/5
     user_payload = {
@@ -290,7 +299,7 @@ def handle_author_tests(ctx: Any) -> Any:
             "role": "user",
             "content": (
                 f"{format_env_block(tenv)}\n\n"
-                "Author pytest tests for this component/integration node.\n"
+                f"Author {adapter.test_framework} tests for this component/integration node.\n"
                 f"Context JSON:\n```json\n{json.dumps(user_payload, indent=2, sort_keys=True)}\n```"
             ),
         },
@@ -298,12 +307,11 @@ def handle_author_tests(ctx: Any) -> Any:
 
     def _validate_tests_payload(data: dict[str, Any]) -> list[str]:
         errs: list[str] = []
-        rel_path = _safe_rel_test_path(data["file_path"], node)
+        rel_path = _safe_rel_test_path(data["file_path"], node, adapter)
         code = data["code"]
-        try:
-            ast.parse(code, filename=rel_path)
-        except SyntaxError as exc:
-            errs.append(f"Python syntax error at line {exc.lineno}: {exc.msg}")
+        syntax_error = _adapter_for(project).check_syntax(code, rel_path)
+        if syntax_error:
+            errs.append(syntax_error)
             return errs
         trace = check_traceability(requirements, {rel_path: code})
         if not trace.passed:
@@ -331,10 +339,11 @@ def handle_author_tests(ctx: Any) -> Any:
         _fail_node(ctx.store, node["id"], str(exc))
         return _make_job_result(False, error=str(exc))
 
-    test_rel = _safe_rel_test_path(parsed["file_path"], node)
-    raw_test_cmd = f"pytest -q {test_rel}"
-    wrapped_cmd = tenv_mgr.wrap_test_command(ws_root, tenv, raw_test_cmd)
-    env_cmd = f"PYTHONPATH=src {wrapped_cmd}" if os.name != "nt" else wrapped_cmd
+    test_rel = _safe_rel_test_path(parsed["file_path"], node, adapter)
+    test_cmd = adapter.test_command(project, node, paths=(test_rel,))
+    raw_test_cmd = shlex.join(test_cmd.argv)
+    wrapped_cmd = tenv_mgr.wrap_adapter_command(ws_root, tenv, test_cmd)
+    env_cmd = _apply_env_overrides(adapter, project, ws_root, wrapped_cmd)
 
     # Validate tests RUN and FAIL against NotImplementedError stubs (BLD-3)
     policy = _path_policy(writable=(test_rel,), readonly=("src/**", ".nai/**"))
@@ -350,19 +359,16 @@ def handle_author_tests(ctx: Any) -> Any:
             _write_via_ws(ctx.ws, ws_root, test_rel, code)
             rc, out = _unpack_cmd_result(ctx.ws.run_command(env_cmd))
             # A real syntax error in the test itself is never an acceptable
-            # pre-implementation failure.
-            bad_test_syntax = "SyntaxError" in out or "IndentationError" in out
-            # BLD-3: a valid failing test must fail *because the stub is not
-            # implemented*. assert False / NameError are not acceptable.
-            fails_on_stub = "NotImplementedError" in out
-            # BLD-7: integration glue has no contract stub. Until the integrate
-            # job creates the wiring module, the frozen scenario test fails with
-            # ModuleNotFoundError for exactly that module; that is the expected
-            # pre-implementation state. Other import failures still go to repair.
-            missing_integration_module = (
-                is_integration and f"No module named '{pkg}.{mod}'" in out
-            )
-            if rc != 0 and not bad_test_syntax and (fails_on_stub or missing_integration_module):
+            # pre-implementation failure.  BLD-3: a valid failing test must fail
+            # *because the stub is not implemented*; assert False / NameError are
+            # not acceptable.  BLD-7: integration glue has no contract stub, so a
+            # ModuleNotFoundError for exactly the wiring module is the expected
+            # pre-implementation state.  Other import failures still go to repair.
+            outcome = adapter.parse_result(out, rc, "test")
+            expected_module = f"{pkg}.{mod}" if is_integration else None
+            if rc != 0 and adapter.stub_failure_is_valid(
+                outcome, integration=is_integration, expected_module=expected_module
+            ):
                 break
 
             if stub_round == 3:
@@ -392,7 +398,7 @@ def handle_author_tests(ctx: Any) -> Any:
                 max_repairs=3,
             )
             code = parsed["code"]
-            test_rel = _safe_rel_test_path(parsed["file_path"], node)
+            test_rel = _safe_rel_test_path(parsed["file_path"], node, adapter)
 
         # Freeze tests: compute sha1, make read-only on disk, record TestRecord & test_command (BLD-3, CORE-3)
         frozen_hash = hashlib.sha1(code.encode("utf-8")).hexdigest()
@@ -504,12 +510,10 @@ def handle_implement(ctx: Any) -> Any:
         return _make_job_result(False, error=msg, needs_decomposition=True)
 
     # Path policy: node may write ONLY its own source files; tests & .nai are strictly read-only
+    adapter = _adapter_for(project)
     stub_rel = node_stub_rel_path(project, node)
-    pkg = project_package_name(project)
-    mod = slugify_module(node["name"])
-    package_dir = (layout.src_dir(".", "") / pkg / mod).as_posix()
-    writable = (stub_rel, f"{package_dir}/**")
-    readonly = ("tests/**", ".nai/**", "conftest.py", "pytest.ini", "pyproject.toml", "setup.cfg", "tox.ini", entities_rel_path(project))
+    writable = adapter.writable_globs(project, node)
+    readonly = adapter.protected_globs(project)
     policy = _path_policy(writable=writable, readonly=readonly)
 
     input_ref = ctx.job.get("input_ref") or {}
@@ -604,10 +608,15 @@ def handle_verify(ctx: Any) -> Any:
     tenv_mgr = TargetEnvManager()
     tenv_mgr.ensure_env(ws_root, tenv)
 
+    adapter = _adapter_for(project)
     test_records = list(ctx.store.list_test_records(node["id"]) or [])
     raw_test_cmd = node.get("test_command")
     if not raw_test_cmd and test_records:
-        raw_test_cmd = f"pytest -q {' '.join(tr['file_path'] for tr in test_records)}"
+        raw_test_cmd = shlex.join(
+            adapter.test_command(
+                project, node, paths=tuple(tr["file_path"] for tr in test_records)
+            ).argv
+        )
     if not raw_test_cmd:
         _fail_node(ctx.store, node["id"], "No test_command or frozen TestRecord found")
         return _make_job_result(False, error="No test_command configured")
@@ -650,7 +659,7 @@ def handle_verify(ctx: Any) -> Any:
 
     # 3. Run test_command inside target env with -W error::DeprecationWarning (TENV-2, CORE-4)
     wrapped_cmd = tenv_mgr.wrap_test_command(ws_root, tenv, raw_test_cmd)
-    effective_cmd = f"PYTHONPATH=src {wrapped_cmd}" if os.name != "nt" else wrapped_cmd
+    effective_cmd = _apply_env_overrides(adapter, project, ws_root, wrapped_cmd)
     policy = _path_policy(writable=(), readonly=("src/**", "tests/**", ".nai/**"))
 
     with ctx.ws.job_context(
@@ -771,13 +780,14 @@ def handle_integrate(ctx: Any) -> Any:
     TargetEnvManager().ensure_env(ws_root, tenv)
     tools_bundle = build_tools_bundle(ctx.store, project, node, ws_root)
 
-    wiring_rel = layout.python_source_rel(project, node)
+    adapter = _adapter_for(project)
+    wiring_rel = adapter.source_rel(project, node)
     policy = _path_policy(writable=(wiring_rel,), readonly=("tests/**", ".nai/**"))
 
     prompt = get_prompt("integrate")
     children = ctx.store.list_nodes(project["id"], parent_id=parent["id"]) if parent else []
     child_summaries = [
-        {"name": c["name"], "kind": c["kind"], "status": c["status"], "stub": node_stub_rel_path(project, c)}
+        {"name": c["name"], "kind": c["kind"], "status": c["status"], "stub": adapter.source_rel(project, c)}
         for c in children
         if c["id"] != node["id"]
     ]

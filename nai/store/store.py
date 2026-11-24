@@ -104,6 +104,115 @@ def _safe_filename(value: str) -> str:
     return name or "artifact.bin"
 
 
+def _tree_parts(relpath: str) -> tuple[str, ...] | None:
+    """Return safe parts for a project-tree file, or ``None`` for state/unsafe paths."""
+    try:
+        parts = _safe_relative_path(relpath).parts
+    except ExportImportError:
+        return None
+    if not parts or parts[0] in {".nai", ".git"}:
+        return None
+    if parts[0] in {layout.MARKER_NAME, layout.MANIFEST_NAME}:
+        return None
+    return parts
+
+
+def _contract_object(raw: Any) -> dict[str, Any]:
+    """Decode a stored contract JSON column into a plain object."""
+    if isinstance(raw, dict):
+        return raw
+    if not raw:
+        return {}
+    try:
+        value = json.loads(raw)
+    except (TypeError, ValueError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _node_paths(rows: list[dict[str, Any]], slugs: dict[str, str]) -> dict[str, str]:
+    """Map node id -> slug path below the root, using the slugs assigned on import."""
+    by_id = {row["id"]: row for row in rows}
+    cache: dict[str, str] = {}
+
+    def walk(node_id: str) -> str:
+        if node_id in cache:
+            return cache[node_id]
+        row = by_id.get(node_id)
+        if row is None:
+            return ""
+        parent = row.get("parent_id")
+        slug = slugs.get(node_id) or layout.slugify(str(row.get("name") or ""))
+        if not parent:
+            cache[node_id] = ""
+        else:
+            cache[node_id] = layout.node_path([*walk(parent).split("/"), slug])
+        return cache[node_id]
+
+    for node_id in by_id:
+        walk(node_id)
+    return cache
+
+
+def _restore_project_tree(
+    workspace: Path,
+    tables: dict[str, Any],
+    id_maps: dict[str, dict[str, str]],
+    node_slugs: dict[str, str],
+    bundle_manifest: dict[str, Any],
+    bundle: _BundleReader,
+) -> None:
+    """Rebuild the project tree from bundled files and the stored spec/contract rows."""
+    entries: dict[str, dict[str, Any]] = {}
+    for item in bundle_manifest.get("tree_files") or []:
+        if not isinstance(item, dict):
+            continue
+        relpath = str(item.get("path") or "")
+        parts = _tree_parts(relpath)
+        if parts is None:
+            continue
+        data = bundle.read("tree/" + relpath)
+        expected = str(item.get("sha256") or "")
+        if expected and hashlib.sha256(data).hexdigest() != expected:
+            raise ExportImportError(f"tree file hash mismatch: {relpath}")
+        target = paths.resolve_relative(workspace, relpath)
+        paths.write_atomic(target, data, root=workspace)
+        entries[relpath] = {
+            "sha256": hashlib.sha256(data).hexdigest(),
+            "node_id": id_maps["nodes"].get(item.get("node_id")),
+            "stage": item.get("stage"),
+        }
+
+    paths_by_id = _node_paths(list(tables.get("nodes") or []), node_slugs)
+    for row in tables.get("nodes") or []:
+        node_id = row["id"]
+        path = paths_by_id.get(node_id, "")
+        spec_text = str(row.get("spec_text") or "")
+        if spec_text:
+            target = layout.spec_path(workspace, path)
+            paths.write_atomic(target, spec_text, root=workspace)
+            entries[layout.relative_to_root(workspace, target)] = {
+                "sha256": manifest.sha256_text(spec_text),
+                "node_id": id_maps["nodes"].get(node_id),
+                "stage": "spec",
+            }
+        contract = _contract_object(row.get("contract_json"))
+        if contract:
+            text = json.dumps(contract, indent=2, sort_keys=True)
+            targets = [layout.node_dir(workspace, path) / "interfaces.json"]
+            if not row.get("parent_id"):
+                targets.append(layout.contract_path(workspace))
+            for target in targets:
+                paths.write_atomic(target, text, root=workspace)
+                entries[layout.relative_to_root(workspace, target)] = {
+                    "sha256": manifest.sha256_text(text),
+                    "node_id": id_maps["nodes"].get(node_id),
+                    "stage": "contract",
+                }
+
+    manifest.write(workspace, entries)
+
+
 class Store:
     """SQLite store with migrations, status transitions, hashes and project bundles.
 
@@ -437,6 +546,9 @@ class Store:
     ) -> str:
         project_id = project_id or new_id()
         settings_obj = dict(settings or {})
+        # The language adapter is selected by settings.language; Python is the
+        # historical default and stays the default for new projects.
+        settings_obj.setdefault("language", "python")
         if not self._has_column("projects", "slug"):
             # Pre-0006 schema (migration tests): keep the historical behaviour.
             workspace = Path(workspace_path).expanduser().resolve() if workspace_path else (
@@ -1551,15 +1663,37 @@ class Store:
                 bundle_name = f"artifacts/{artifact['id']}.bin"
                 (stage / bundle_name).write_bytes(data)
                 artifact_files[artifact["id"]] = bundle_name
-            manifest = {
+            tree_files: list[dict[str, Any]] = []
+            for relpath, entry in sorted(manifest.read(workspace).items()):
+                parts = _tree_parts(relpath)
+                if parts is None:
+                    continue
+                try:
+                    source = paths.resolve_relative(workspace, relpath)
+                except (ValueError, OSError):
+                    continue
+                if not source.is_file():
+                    continue
+                data = source.read_bytes()
+                target = stage / "tree" / Path(*parts)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(data)
+                tree_files.append({
+                    "path": relpath,
+                    "sha256": hashlib.sha256(data).hexdigest(),
+                    "node_id": entry.get("node_id"),
+                    "stage": entry.get("stage"),
+                })
+            bundle_manifest = {
                 "format": "nai-project-export",
                 "format_version": 1,
                 "exported_at": utc_now(),
                 "project_id": project_id,
                 "tables": tables,
                 "artifact_files": artifact_files,
+                "tree_files": tree_files,
             }
-            (stage / "manifest.json").write_text(canonical_json(manifest) + "\n", encoding="utf-8")
+            (stage / "manifest.json").write_text(canonical_json(bundle_manifest) + "\n", encoding="utf-8")
             if is_zip:
                 temp_zip = destination.with_name(destination.name + ".tmp")
                 with zipfile.ZipFile(temp_zip, "w", compression=zipfile.ZIP_DEFLATED) as archive:
@@ -1636,6 +1770,7 @@ class Store:
             for table in ("nodes", "jobs", "events", "artifacts", "approvals", "commands"):
                 id_maps[table] = {row["id"]: new_id() for row in tables.get(table, [])}
             id_maps["projects"] = {old_project_id: new_project_id}
+            node_slugs: dict[str, str] = {}
 
             try:
                 with self._transaction() as conn:
@@ -1654,6 +1789,7 @@ class Store:
                         taken = sibling_slugs.setdefault(parent, set())
                         node_slug = row.get("slug") or layout.unique_slug(str(row["name"]), taken)
                         taken.add(str(node_slug))
+                        node_slugs[row["id"]] = str(node_slug)
                         conn.execute(
                             """INSERT INTO nodes(id,project_id,parent_id,kind,name,objective,spec_text,contract_json,status,
                                content_hash,built_hash,attempts,test_command,slug,created_at,updated_at)
@@ -1732,6 +1868,7 @@ class Store:
                         )
                     self._insert_event(conn, new_project_id, event_type="project.imported", message="Project imported from export bundle",
                                        data={"source_project_id": old_project_id})
+                    _restore_project_tree(workspace, tables, id_maps, node_slugs, bundle_manifest, bundle)
             except Exception:
                 if not workspace_existed:
                     shutil.rmtree(workspace, ignore_errors=True)

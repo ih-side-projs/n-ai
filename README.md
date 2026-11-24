@@ -53,6 +53,7 @@ and requirement IDs (CORE-1, STO-3, SCH-7, SPEC-3, ...).
 | **SS-TOOLS** | One registry feeding both OpenAI-style tool schemas and an MCP server over stdio |
 | **SS-WEB** | Local FastAPI dashboard: project tree, approvals, editing, controls, logs (SSE), metrics, tools |
 | **SS-EVAL** | Benchmark suites, scripted stub model server, `nai bench`, JSON/Markdown reports |
+| **SS-LANGS** | Language adapters: layout, stubs, commands, result parsing and path policy behind one protocol |
 | **Service** | Thin supervisor for web + runner + on-demand `nai` instances, with a CLI and local control socket |
 
 ## Architecture
@@ -128,6 +129,7 @@ Console scripts after installation:
 | `nai service exec SPEC.md` | submit a new `nai` instance to the service |
 | `nai where PROJECT` | show a project's stable slug, output root and manifest status |
 | `nai relocate PROJECT DIR` | verify the manifest and move a project to a new output root |
+| `nai project create NAME` | create a Store-backed project (`--output-dir`, `--brief`, `--json`) |
 | `nai doctor` / `nai --doctor` | offline integration self-check (imports, planners, handlers, schemas, assets) |
 | `python devswarm.py SPEC.md` | original v1 entry point |
 

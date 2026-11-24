@@ -12,6 +12,7 @@ Each subsystem corresponds to a work package in the overall specification.
 | SS-TOOLS | `nai/tools/` | [tools.md](tools.md) |
 | SS-WEB | `nai/web/` | [web.md](web.md) |
 | SS-EVAL | `nai/eval/` | [evaluation.md](evaluation.md) |
+| SS-LANGS | `nai/langs/` | [languages.md](languages.md) |
 
 ## Dependency direction
 

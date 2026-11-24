@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .stubs import extract_stub_signatures, node_stub_rel_path
+from ..langs import registry
 from .tenv import TargetEnv, estimate_tokens, format_env_block, load_api_notes
 
 DEFAULT_STYLE_GUIDE = (
@@ -70,6 +70,7 @@ def _format_dependency_stubs(
         return "## Direct Dependency Interfaces\n(none)"
 
     blocks: list[str] = []
+    adapter = registry.language_for(project)
     contract = parent_contract or {}
     comp_map = {c.get("name"): c for c in (contract.get("components") or []) if c.get("name")}
 
@@ -78,15 +79,16 @@ def _format_dependency_stubs(
         if dep is None:
             continue
         dep_name = dep["name"]
+        stub_rel = adapter.source_rel(project, dep)
         stub_sig_text = ""
         if workspace_root is not None:
-            stub_path = workspace_root / node_stub_rel_path(project, dep)
+            stub_path = workspace_root / stub_rel
             if stub_path.is_file():
                 # Strictly signatures and docstrings only, NEVER implementations (BLD-1)
-                stub_sig_text = extract_stub_signatures(stub_path.read_text(encoding="utf-8"))
+                stub_sig_text = adapter.extract_signatures(stub_path.read_text(encoding="utf-8"))
 
         if stub_sig_text:
-            blocks.append(f"### Dependency `{dep_name}` (`{node_stub_rel_path(project, dep)}`)\n```python\n{stub_sig_text}\n```")
+            blocks.append(f"### Dependency `{dep_name}` (`{stub_rel}`)\n```{adapter.id}\n{stub_sig_text}\n```")
         elif dep_name in comp_map:
             provides = comp_map[dep_name].get("provides") or []
             blocks.append(

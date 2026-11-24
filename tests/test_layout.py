@@ -239,9 +239,10 @@ def test_migration_backfills_slugs_and_layout(tmp_path: Path):
 
     store = Store(db)
     try:
-        assert store.schema_version == 6
+        assert store.schema_version == 7
         project = store.get_project(pid)
         assert project["slug"] == "legacy-project"
+        assert project["settings"]["language"] == "python"
         assert project["output_root"] == str(tmp_path)
         root = store.get_node(root_id)
         child = store.get_node(child_id)
@@ -348,6 +349,31 @@ def test_cli_registers_where_and_relocate():
 
     assert "where" in nai.cli.SUBCOMMANDS
     assert "relocate" in nai.cli.SUBCOMMANDS
+    assert "project" in nai.cli.SUBCOMMANDS
+
+
+def test_project_create_cli(tmp_path: Path, capsys):
+    """Answer 4: ``nai project create`` uses the Store-backed layout."""
+    from nai.project_cli import project_main
+
+    db = tmp_path / "nai.sqlite3"
+    out = tmp_path / "out"
+    rc = project_main(["create", "CLI Project", "--db", str(db), "--output-dir", str(out), "--brief", "hello"])
+    assert rc == 0
+    captured = capsys.readouterr()
+    assert "created CLI Project" in captured.out
+
+    with Store(db, read_only=True) as store:
+        project = store.find_project("CLI Project")
+        assert project is not None
+        workspace = Path(project["workspace_path"])
+        assert workspace == out / "cli-project"
+        assert workspace.is_dir()
+        assert (workspace / ".nai-project").is_file()
+        assert (workspace / ".nai-manifest.json").is_file()
+
+    assert project_main([]) == 2
+    assert project_main(["bogus"]) == 2
 
 
 def test_wheel_contains_layout_module_and_migration(tmp_path: Path):
@@ -365,4 +391,10 @@ def test_wheel_contains_layout_module_and_migration(tmp_path: Path):
     assert "nai/layout.py" in names
     assert "nai/paths.py" in names
     assert "nai/manifest.py" in names
+    assert "nai/project_cli.py" in names
+    assert "nai/langs/__init__.py" in names
+    assert "nai/langs/base.py" in names
+    assert "nai/langs/registry.py" in names
+    assert "nai/langs/python.py" in names
     assert "nai/store/migrations/0006_project_layout.sql" in names
+    assert "nai/store/migrations/0007_project_language.sql" in names
