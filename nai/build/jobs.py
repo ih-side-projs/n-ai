@@ -512,7 +512,7 @@ def handle_implement(ctx: Any) -> Any:
     store_proxy_type = type(ctx.store).__name__
     if store_proxy_type != "StoreProxy":
         ctx.store.increment_node_attempts(node["id"], 1)
-    return _make_job_result(True, summary=summary, writable=list(writable), prompt_id=prompt.id)
+    return _make_job_result(True, summary=summary, writable=list(writable), prompt_id=prompt.id, content_hash=node.get("content_hash"))
 
 
 # ---------------------------------------------------------------------------
@@ -746,7 +746,7 @@ def handle_integrate(ctx: Any) -> Any:
         if hasattr(ctx.ws, "checkpoint_job"):
             ctx.ws.checkpoint_job()
 
-    return _make_job_result(True, summary=summary, prompt_id=prompt.id)
+    return _make_job_result(True, summary=summary, prompt_id=prompt.id, content_hash=node.get("content_hash"))
 
 
 # ---------------------------------------------------------------------------

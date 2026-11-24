@@ -42,6 +42,9 @@ jobs:
       - name: Test suite
         run: pytest -q
 
+      - name: Python pipeline end-to-end (stub LLM)
+        run: pytest -q tests/e2e/test_pipeline_python.py --tb=short
+
       - name: End-to-end integration (stub LLM)
         run: pytest -q tests/test_end_to_end.py tests/e2e/ --tb=short
 

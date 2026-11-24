@@ -695,6 +695,8 @@ class Runner:
                                     node_id=roots[0]["id"], level="warning")
 
                 for n in walk_nodes(self.store, pid):
+                    if n.get("parent_id") is None:
+                        continue  # roots still need decompose/interfaces planning
                     if n.get("status") != "draft" or not n.get("spec_text"):
                         continue
                     for j in self.store.list_jobs(pid, status="queued", limit=5000):

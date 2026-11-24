@@ -424,6 +424,10 @@ class Store:
             raise ValueError(f"invalid project status: {status}")
         self.update_project(project_id, status=status)
 
+    def update_project_status(self, project_id: str, status: str) -> None:
+        """BLD-12 alias used by the build pipeline after root integration passes."""
+        self.set_project_status(project_id, status)
+
     def create_node(
         self,
         project_id: str,

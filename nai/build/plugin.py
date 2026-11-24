@@ -321,8 +321,10 @@ def plan(pc: Any) -> None:
                 store.create_job(project_id, "author_tests", "reasoner", node_id=nid)
                 continue
 
-            last_job = node_jobs[-1] if node_jobs else None
-            if last_job and last_job.get("kind") == "implement" and last_job.get("status") == "succeeded":
+            # A later lint/review job can be the last job even after a
+            # successful implementation. Look for any successful implement for
+            # this exact content hash instead of inspecting only the last row.
+            if _has_succeeded_for_hash(node_jobs, "implement", chash):
                 store.create_job(project_id, "verify", "coder", node_id=nid)
             else:
                 store.create_job(project_id, "implement", "coder", node_id=nid, attempt=1)
