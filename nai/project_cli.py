@@ -12,6 +12,7 @@ import sys
 from pathlib import Path
 
 from . import paths
+from .langs import support as language_support
 from .store import Store, StoreError
 
 
@@ -30,6 +31,8 @@ def create_main(argv: list[str]) -> int:
     parser.add_argument("--brief-file", default=None, help="Read the brief from this file")
     parser.add_argument("--output-dir", default=None,
                         help="Base directory for the project (default: NAI_OUTPUT_ROOT or ./outputs)")
+    parser.add_argument("--language", default=None, choices=language_support.supported_languages(),
+                        help="Project language (one per project; default: python)")
     parser.add_argument("--db", default=".nai/nai.sqlite3", help="Store database path")
     parser.add_argument("--json", action="store_true", help="Print the project as JSON")
     args = parser.parse_args(argv)
@@ -40,9 +43,12 @@ def create_main(argv: list[str]) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
+    settings = {"language": args.language} if args.language else None
     try:
         with Store(Path(args.db).expanduser()) as store:
-            project_id = store.create_project(args.name, brief, output_root=args.output_dir)
+            project_id = store.create_project(
+                args.name, brief, output_root=args.output_dir, settings=settings,
+            )
             project = store.get_project(project_id)
     except (paths.LayoutError, StoreError, ValueError, OSError) as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -52,6 +58,7 @@ def create_main(argv: list[str]) -> int:
         print(json.dumps(project, indent=2, sort_keys=True))
     else:
         print(f"created {project['name']} ({project_id})")
+        print(f"language:     {(project.get('settings') or {}).get('language', '')}")
         print(f"project root: {project['workspace_path']}")
         print(f"output root:  {project['output_root']}")
     return 0

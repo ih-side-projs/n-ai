@@ -5,7 +5,7 @@ only source of truth for which languages are supported; never hard-code a list
 elsewhere.
 """
 
-from . import registry
+from . import knowledge, probe, registry, support
 from .base import (
     Command,
     LanguageAdapter,
@@ -14,6 +14,7 @@ from .base import (
     StubFile,
     StubResult,
     TestCase,
+    ToolCheck,
 )
 from .python import PythonAdapter
 
@@ -27,5 +28,9 @@ __all__ = [
     "StubFile",
     "StubResult",
     "TestCase",
+    "ToolCheck",
+    "knowledge",
+    "probe",
     "registry",
+    "support",
 ]

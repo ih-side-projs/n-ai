@@ -1,0 +1,25 @@
+{
+  "language": "python",
+  "name": "Tiny Library",
+  "brief": "# Tiny Library\n\nBuild a two-component Python library:\n\n- `text-normalizer` provides `normalize_text(text: str) -> str`.\n- `word-counter` provides `count_words(text: str) -> int`.\n- Integration scenario S1: normalize text, then count its words.\n",
+  "settings": {
+    "package_name": "tiny_lib",
+    "target_env": {
+      "type_checker": "none",
+      "packages": ["pytest==9.2.0"],
+      "lint_rules": []
+    }
+  },
+  "e2e_test": "tests/e2e/test_pipeline_python.py",
+  "expected": {
+    "modules": ["text-normalizer", "word-counter"],
+    "source_files": [
+      "src/tiny_lib/text_normalizer.py",
+      "src/tiny_lib/word_counter.py"
+    ],
+    "test_files": [
+      "tests/test_text_normalizer.py",
+      "tests/test_word_counter.py"
+    ]
+  }
+}

@@ -94,8 +94,12 @@ The store's `projects.settings` JSON can override X9 limits for one project
 `budget_limit_tokens`. Project values override the TOML `[limits]` table.
 
 `settings.language` selects the [language adapter](subsystems/languages.md) and
-defaults to `python` (migration `0007_project_language.sql`). Unknown values
-raise `UnknownLanguageError` instead of falling back silently.
+defaults to `python` (migration `0007_project_language.sql`). Only ids whose
+adapter ships a knowledge pack and a toolchain probe are accepted — run
+`nai languages` for the list — and a project has exactly one language. Unknown
+values raise `StoreError`/`UnknownLanguageError` instead of falling back
+silently. `settings.target_env.language` is the human stack string (`Python
+3.12`) used by prompts and the environment block.
 
 ## Structured-output method (D9)
 

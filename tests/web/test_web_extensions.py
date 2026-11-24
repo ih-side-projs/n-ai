@@ -94,12 +94,14 @@ class TestSettings:
             "csrf_token": token, "max_requirements": "6", "max_functions": "9",
             "max_components": "5", "max_depth": "3", "budget_limit_tokens": "1000",
             "test_commands": "pytest -q\nruff check .", "backup_location": "/tmp/bak",
-            "target_language": "Python 3.12",
+            "target_language": "python",
         }, follow_redirects=False)
         assert r.status_code == 303
         saved = initialized_store.get_project(pid)["settings"]
         assert saved["max_components_per_level"] == 5
         assert saved["test_commands"] == ["pytest -q", "ruff check ."]
+        assert saved["language"] == "python"
+        assert saved["target_env"]["language"] == "Python 3.12"
 
 
 class TestServicePage:
@@ -337,7 +339,7 @@ class TestStructuredProjectIntake:
             "csrf_token": token,
             "name": "Intake Project",
             "brief": "A detailed paragraph describing the product.",
-            "language": "Python 3.12",
+            "language": "python",
             "interface_type": "Web application",
             "target_users": "Small teams",
             "core_workflows": "Create, review, close tasks",
@@ -358,6 +360,7 @@ class TestStructuredProjectIntake:
         assert settings["intake"]["target_users"] == "Small teams"
         assert settings["intake"]["testing_expectations"] == "pytest + browser smoke"
         assert settings["intake_complete"] is False
+        assert settings["language"] == "python"
         assert settings["target_env"]["language"] == "Python 3.12"
 
     async def test_intake_answers_and_begin_design_enqueue_commands(self, client, initialized_store):

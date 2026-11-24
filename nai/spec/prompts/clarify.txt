@@ -1,4 +1,4 @@
-# version: 1
+# version: 2
 You are clarifying a project brief by proposing up to 5 specific questions with default answers.
 
 Input:
@@ -22,4 +22,5 @@ Rules:
 3. Each question must have a sensible default the owner can just accept.
 4. Categories: language, dependencies, scope, interfaces, nonfunctional, other.
 5. Max 5 questions total.
-6. Return ONLY the JSON object, no extra text.
+6. Only offer languages from the Supported Languages block. If the brief names a language that is not supported, ask which supported language to use instead; never substitute silently.
+7. Return ONLY the JSON object, no extra text.

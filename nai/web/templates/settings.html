@@ -20,7 +20,14 @@
       <div>
         <h2>Budget &amp; environment</h2>
         <label>Token budget (0 = unlimited)<br><input type="number" name="budget_limit_tokens" min="0" value="{{ settings.budget_limit_tokens|default(0) }}"></label>
-        <label>Target language / stack<br><input type="text" name="target_language" value="{{ settings.get('target_env', {}).get('language', 'Python 3.12') }}"></label>
+        <label>Target language<br>
+          <select name="target_language">
+            {% for language in languages %}
+            <option value="{{ language.id }}" {% if settings.get('language', 'python') == language.id %}selected{% endif %}>{{ language.display_name }} — {{ language.stack_hint }}</option>
+            {% endfor %}
+          </select>
+          <span class="tiny muted">One language per project; only registered adapters are listed.</span>
+        </label>
         <label>Backup location (optional)<br><input type="text" name="backup_location" value="{{ settings.backup_location|default('') }}"></label>
         <h2>Verification commands</h2>
         <p class="tiny muted">One command per line; a node passes when its test command matches one of these.</p>

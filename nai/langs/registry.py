@@ -24,6 +24,11 @@ def register(adapter: LanguageAdapter) -> LanguageAdapter:
     return adapter
 
 
+def unregister(language_id: str) -> None:
+    """Remove *language_id* from the registry (plugins and tests)."""
+    _REGISTRY.pop(language_id, None)
+
+
 def get(language_id: str | None) -> LanguageAdapter:
     """Return the adapter for *language_id* (defaults to Python)."""
     key = (language_id or DEFAULT_LANGUAGE).strip().lower()

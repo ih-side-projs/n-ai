@@ -42,6 +42,11 @@ jobs:
       - name: Test suite
         run: pytest -q
 
+      - name: Language support matrix
+        run: >-
+          pytest -q tests/langs/test_support.py tests/langs/test_knowledge.py
+          tests/e2e/test_language_fixtures.py --tb=short
+
       - name: Python pipeline end-to-end (stub LLM)
         run: pytest -q tests/e2e/test_pipeline_python.py --tb=short
 
@@ -76,6 +81,7 @@ jobs:
           assert list((root / 'store' / 'migrations').glob('*.sql'))
           assert list((root / 'spec' / 'schemas').glob('*.json'))
           assert list((root / 'build' / 'prompts').glob('*.txt'))
+          assert list((root / 'langs' / 'knowledge').glob('*/*.md'))
           assert (root / 'web' / 'templates' / 'base.html').exists()
           from nai.store import Store
           import tempfile

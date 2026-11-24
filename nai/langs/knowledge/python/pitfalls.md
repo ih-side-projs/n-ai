@@ -1,0 +1,12 @@
+- Mutable default arguments (`def f(items=[])`) are shared across calls; use `None` plus `field(default_factory=...)`.
+- Closures created in a loop capture the variable, not its value; bind with a default argument or `functools.partial`.
+- `is` compares identity: use `is None` for sentinels and `==` for values.
+- Float equality fails; use `math.isclose` or `pytest.approx`.
+- Naive `datetime` values mix timezones silently; always attach `timezone.utc`.
+- `except Exception: pass` hides real failures; catch the narrow type and re-raise or report.
+- Files opened without `with` leak handles when an exception escapes.
+- `sys.path` edits and implicit relative imports break under pytest; import the package by name.
+- Default recursion limit is 1000; prefer iteration for user-sized input.
+- `dict` preserves insertion order but `set` does not; sort before comparing output.
+- `str.strip()` removes whitespace from both ends; `str.split()` collapses runs — choose deliberately.
+- `//` floors toward negative infinity while `int(a / b)` truncates toward zero.

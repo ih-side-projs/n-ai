@@ -7,14 +7,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from ..langs import registry
+from ..langs import knowledge, registry
 from .tenv import TargetEnv, estimate_tokens, format_env_block, load_api_notes
-
-DEFAULT_STYLE_GUIDE = (
-    "- Follow PEP 8 and PEP 484 type annotations.\n"
-    "- Write clean docstrings, avoid deprecated stdlib/library APIs (ruff UP, B).\n"
-    "- Keep functions focused, deterministic where possible, and handle edge cases explicitly."
-)
 
 
 @dataclass(frozen=True)
@@ -112,6 +106,7 @@ def assemble_context_pack(
     parent_contract: dict[str, Any] | None = None,
     workspace_root: Path | None = None,
     tools_section: str = "",
+    job_kind: str | None = None,
 ) -> ContextPack:
     """Assemble deterministic context pack for a build job and enforce context cap (BLD-1)."""
     settings = project.get("settings") or {}
@@ -124,6 +119,9 @@ def assemble_context_pack(
         if workspace_root is not None
         else ""
     )
+    # Language knowledge is chosen by job kind, never by the model (X2, SS-LANGS).
+    adapter = registry.language_for(project)
+    language_block = knowledge.block(adapter.id, job_kind)
     spec_block = (
         f"## Component Specification: `{node['name']}` ({node['kind']})\n"
         f"Objective: {node.get('objective') or ''}\n\n"
@@ -131,13 +129,14 @@ def assemble_context_pack(
     ).strip()
     entities_block = _format_entities_touched(node, parent_contract)
     deps_block = _format_dependency_stubs(store, project, node, parent_contract, workspace_root)
-    style_guide = "## Style Guide\n" + str(settings.get("style_guide") or DEFAULT_STYLE_GUIDE)
+    style_guide = "## Style Guide\n" + str(settings.get("style_guide") or adapter.style_guide)
     tools_block = tools_section.strip() or "## Allowed Tools\n- (none)"
 
     ordered_sections = {
         "environment": env_block,
         "api_notes": api_notes,
         "spec": spec_block,
+        "language_knowledge": language_block,
         "entities": entities_block,
         "dependencies": deps_block,
         "style_guide": style_guide,

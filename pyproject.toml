@@ -52,6 +52,7 @@ include = ["nai*"]
 "nai.spec" = ["schemas/*.json"]
 "nai.build" = ["prompts/*.txt"]
 "nai.store" = ["migrations/*.sql"]
+"nai.langs.knowledge" = ["*/*.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

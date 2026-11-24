@@ -23,8 +23,10 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from nai.store import Store
+from nai.store import Store, StoreError
 
+from ..langs import registry as language_registry
+from ..langs import support as language_support
 from ..workflow import (
     DESIGN,
     IMPLEMENTATION,
@@ -85,6 +87,20 @@ class WebSettings:
             event_poll_seconds=max(0.25, float(os.environ.get("NAI_WEB_EVENT_POLL_SECONDS", "1"))),
             output_roots=output_roots,
         )
+
+
+def _language_options() -> list[dict[str, str]]:
+    """Supported languages for the intake and settings dropdowns (registry-derived)."""
+    options: list[dict[str, str]] = []
+    for language_id in language_support.supported_languages():
+        adapter = language_registry.get(language_id)
+        options.append({
+            "id": adapter.id,
+            "display_name": adapter.display_name,
+            "stack_hint": adapter.stack_hint,
+            "test_framework": adapter.test_framework,
+        })
+    return options
 
 
 def create_app(
@@ -339,6 +355,7 @@ def create_app(
             "archived_count": archived_count,
             "show_archived": show,
             "output_roots": [str(path) for path in settings.output_roots],
+            "languages": _language_options(),
             "active_page": "projects",
         })
 
@@ -383,10 +400,17 @@ def create_app(
             decoded = raw.decode("utf-8", errors="replace")
             uploaded_spec = decoded if decoded.strip() else ""
         description = brief.strip() or (uploaded_spec.strip()[:500] if uploaded_spec else "")
+        try:
+            selected_language = language_support.require_supported(
+                (language or "").strip() or language_registry.DEFAULT_LANGUAGE
+            )
+        except language_registry.UnknownLanguageError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        adapter = language_registry.get(selected_language)
         guardrails = {
             "description": description,
             "source": "uploaded-spec" if uploaded_spec else "dialog",
-            "language": language.strip(),
+            "language": adapter.stack_hint if (language or "").strip() else "",
             "interface_type": interface_type.strip(),
             "target_users": target_users.strip(),
             "core_workflows": core_workflows.strip(),
@@ -397,12 +421,13 @@ def create_app(
             "testing_expectations": testing_expectations.strip(),
         }
         project_settings: dict[str, Any] = {
+            "language": adapter.id,
             "intake": guardrails,
             "intake_complete": False,
             "intake_waiting": False,
         }
-        if guardrails["language"]:
-            project_settings["target_env"] = {"language": guardrails["language"]}
+        if (language or "").strip():
+            project_settings["target_env"] = {"language": adapter.stack_hint}
         if uploaded_spec:
             project_settings["intake_complete"] = True
             project_settings["clarified"] = True
@@ -421,7 +446,7 @@ def create_app(
                 pid = store.create_project(
                     name, description, settings=project_settings, output_root=selected_root,
                 )
-            except ValueError as exc:
+            except (ValueError, StoreError) as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
             root_id = store.create_node(
                 pid, "root", "system",
@@ -751,7 +776,8 @@ def create_app(
         settings = project.get("settings") or {}
         return templates.TemplateResponse(request=request, name="settings.html",
             context={"request": request, "csrf_token": request.state.csrf_token,
-                     "project": project, "settings": settings, "active_page": "projects"})
+                     "project": project, "settings": settings, "active_page": "projects",
+                     "languages": _language_options()})
 
     @app.post("/projects/{project_id}/settings")
     async def project_settings_save(
@@ -759,13 +785,20 @@ def create_app(
         max_requirements: int = Form(8), max_functions: int = Form(10),
         max_components: int = Form(7), max_depth: int = Form(4),
         budget_limit_tokens: int = Form(0), test_commands: str = Form(""),
-        backup_location: str = Form(""), target_language: str = Form("Python 3.12"),
+        backup_location: str = Form(""), target_language: str = Form("python"),
     ):
         store = Store(settings.database_path, read_only=False)
         try:
             project = store.get_project(project_id)
             if not project:
                 raise HTTPException(status_code=404, detail="Project not found")
+            try:
+                language_id = language_support.require_supported(
+                    target_language.strip() or language_registry.DEFAULT_LANGUAGE
+                )
+            except language_registry.UnknownLanguageError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            adapter = language_registry.get(language_id)
             current = dict(project.get("settings") or {})
             limits = dict(current.get("size_limits") or current)
             limits.update({
@@ -782,7 +815,8 @@ def create_app(
                 "budget_limit_tokens": budget_limit_tokens or None,
                 "test_commands": [c.strip() for c in test_commands.splitlines() if c.strip()],
                 "backup_location": backup_location.strip() or None,
-                "target_env": {**(current.get("target_env") or {}), "language": target_language},
+                "language": adapter.id,
+                "target_env": {**(current.get("target_env") or {}), "language": adapter.stack_hint},
             })
             store.update_project(project_id, settings=current)
             store.record_event(project_id, "project.settings_updated", "Project settings updated via dashboard",

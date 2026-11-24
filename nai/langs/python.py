@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from .. import layout
-from .base import Command, Outcome, ParseResult, StubFile, StubResult
+from .base import Command, Outcome, ParseResult, StubFile, StubResult, ToolCheck
 
 _MARKER = "NotImplementedError"
 _SYNTAX_RE = re.compile(r"SyntaxError|IndentationError")
@@ -37,6 +37,19 @@ class PythonAdapter:
     test_framework = "pytest"
     extensions = (".py",)
     stub_marker = _MARKER
+    stack_hint = "Python 3.12"
+    style_guide = (
+        "- Follow PEP 8 and PEP 484 type annotations.\n"
+        "- Write clean docstrings, avoid deprecated stdlib/library APIs (ruff UP, B).\n"
+        "- Keep functions focused, deterministic where possible, and handle edge cases explicitly."
+    )
+    #: Probe only: pytest/ruff are optional because the project venv installs
+    #: pinned versions from ``target_env.packages``.
+    toolchain = (
+        ToolCheck("python", ("python3", "--version"), fallback=("python", "py")),
+        ToolCheck("pytest", ("pytest", "--version"), required=False),
+        ToolCheck("ruff", ("ruff", "--version"), required=False),
+    )
 
     # -- layout ------------------------------------------------------------
     def package_name(self, project: dict[str, Any]) -> str:

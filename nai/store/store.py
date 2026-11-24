@@ -21,6 +21,8 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from .. import layout, manifest, paths
+from ..langs import registry as language_registry
+from ..langs import support as language_support
 from .errors import (
     DependencyCycleError,
     DependencyError,
@@ -83,6 +85,44 @@ def _json_object(value: Any, label: str) -> str:
     if not isinstance(value, dict):
         raise TypeError(f"{label} must be a JSON object")
     return canonical_json(value)
+
+
+def _validated_language(settings: dict[str, Any]) -> str:
+    """Return a supported language id for ``settings['language']``.
+
+    ``None`` means "use the default".  A list is rejected outright: N-AI v1
+    supports exactly one language per project.
+    """
+    raw = settings.get("language")
+    if raw is None:
+        return language_registry.DEFAULT_LANGUAGE
+    if not isinstance(raw, str):
+        raise StoreError(
+            "settings.language must be one language id (one language per project)"
+        )
+    try:
+        return language_support.require_supported(raw)
+    except language_registry.UnknownLanguageError as exc:
+        raise StoreError(str(exc)) from None
+
+
+def _validated_import_settings(raw: Any) -> dict[str, Any]:
+    """Validate a bundle's project settings before import.
+
+    Bundles can carry any language string; importing one must not smuggle an
+    unsupported language past ``create_project``'s check.
+    """
+    try:
+        settings = json.loads(raw) if isinstance(raw, str) and raw else {}
+    except ValueError as exc:
+        raise ExportImportError(f"invalid project settings in bundle: {exc}") from None
+    if not isinstance(settings, dict):
+        raise ExportImportError("invalid project settings in bundle: expected an object")
+    try:
+        settings["language"] = _validated_language(settings)
+    except StoreError as exc:
+        raise ExportImportError(str(exc)) from None
+    return settings
 
 
 def _decode_json(row: dict[str, Any], source: str, target: str) -> None:
@@ -547,8 +587,9 @@ class Store:
         project_id = project_id or new_id()
         settings_obj = dict(settings or {})
         # The language adapter is selected by settings.language; Python is the
-        # historical default and stays the default for new projects.
-        settings_obj.setdefault("language", "python")
+        # historical default. Unsupported ids are rejected here so every caller
+        # (CLI, web, eval harness, tests) is covered by one check.
+        settings_obj["language"] = _validated_language(settings_obj)
         if not self._has_column("projects", "slug"):
             # Pre-0006 schema (migration tests): keep the historical behaviour.
             workspace = Path(workspace_path).expanduser().resolve() if workspace_path else (
@@ -651,6 +692,9 @@ class Store:
         current = self.get_project(project_id)
         if current is None:
             raise KeyError(f"unknown project: {project_id}")
+        if settings is not None and "language" in settings:
+            settings = dict(settings)
+            settings["language"] = _validated_language(settings)
         values = {
             "name": name if name is not None else current["name"],
             "brief": brief if brief is not None else current["brief"],
@@ -1736,6 +1780,9 @@ class Store:
                 raise ExportImportError("manifest must contain exactly one project")
             original_project = tables["projects"][0]
             old_project_id = original_project["id"]
+            original_project["settings_json"] = canonical_json(
+                _validated_import_settings(original_project.get("settings_json"))
+            )
             new_project_id = project_id or new_id()
             if self.conn.execute("SELECT 1 FROM projects WHERE id=?", (new_project_id,)).fetchone():
                 raise ExportImportError(f"project id already exists: {new_project_id}")

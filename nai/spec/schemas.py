@@ -5,7 +5,22 @@ import json
 from pathlib import Path
 from typing import Any
 
+from ..langs import registry as _language_registry
+from ..langs import support as _language_support
+from .platforms import PLATFORMS
+
 _SCHEMAS_DIR = Path(__file__).resolve().parent / "schemas"
+
+
+def supported_language_ids() -> list[str]:
+    """Language ids the contract schema accepts, derived from the registry."""
+    ids = _language_support.supported_languages() or _language_registry.supported()
+    return ids or [_language_registry.DEFAULT_LANGUAGE]
+
+
+SUPPORTED_LANGUAGES = supported_language_ids()
+
+
 def load_schema(name: str) -> dict[str, Any]:
     path = _SCHEMAS_DIR / f"{name}.json"
     if not path.is_file():
@@ -77,6 +92,12 @@ INTERFACES_SCHEMA = {
             "required": ["entities", "components", "scenarios"],
             "additionalProperties": False,
             "properties": {
+                "language": {
+                    "type": "string",
+                    "enum": SUPPORTED_LANGUAGES,
+                    "default": "python",
+                    "description": "Project language id (one per project); generated from the adapter registry",
+                },
                 "entities": {"type": "array", "items": {
                     "type": "object", "required": ["name", "fields"],
                     "additionalProperties": False, "properties": {
@@ -94,6 +115,12 @@ INTERFACES_SCHEMA = {
                     "additionalProperties": False, "properties": {
                         "name": {"type": "string", "pattern": "^[a-z][a-z0-9-]*$"},
                         "description": {"type": "string"},
+                        "platform": {
+                            "type": "string",
+                            "enum": list(PLATFORMS),
+                            "default": "any",
+                            "description": "any|linux|macos; isolate platform-specific code in leaf components",
+                        },
                         "provides": {"type": "array", "items": {
                             "type": "object", "required": ["name", "signature"],
                             "additionalProperties": False, "properties": {

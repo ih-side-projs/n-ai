@@ -20,7 +20,8 @@ def test_report_and_json_output(capsys):
     assert doctor.main([]) == 0
     out = capsys.readouterr().out
     assert "nai doctor" in out
-    assert "9/9 checks passed" in out
+    total = len(doctor.CHECKS)
+    assert f"{total}/{total} checks passed" in out
 
     assert doctor.main(["--json"]) == 0
     payload = json.loads(capsys.readouterr().out)

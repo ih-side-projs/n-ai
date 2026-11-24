@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import Any
 
 from .. import layout, manifest, paths
+from ..langs import registry as language_registry
+from ..langs import support as language_support
 from .checkers import check_interfaces, lint_spec
 from .prompts import (
     CHECK_INTERFACES,
@@ -154,10 +156,53 @@ def _get_siblings(ctx: Any, node: dict[str, Any]) -> list[dict[str, Any]]:
     pid = node.get("parent_id")
     return ctx.store.list_nodes(ctx.project["id"], parent_id=pid) or []
 
+def _normalise_contract_language(contract: dict[str, Any], project: dict[str, Any]) -> str | None:
+    """Keep ``contract.language`` aligned with the project's single language.
+
+    Returns the value the model declared when it differed, so the caller can log
+    it.  Absent values are left absent: the project setting is authoritative.
+    """
+    declared = contract.get("language")
+    project_language = language_registry.language_for(project).id
+    if declared and str(declared) != project_language:
+        contract["language"] = project_language
+        return str(declared)
+    return None
+
+
+def _target_stack(project: dict[str, Any]) -> str:
+    """Target stack string for prompts: explicit setting first, else the adapter's hint."""
+    configured = str(((project.get("settings") or {}).get("target_env") or {}).get("language") or "").strip()
+    if configured:
+        return configured
+    try:
+        return language_registry.language_for(project).stack_hint
+    except language_registry.UnknownLanguageError:
+        return language_registry.DEFAULT_LANGUAGE
+
+
+def _language_context(project: dict[str, Any]) -> str:
+    """Owner-authored text that may name a language (brief, intake, stack hint)."""
+    settings = project.get("settings") or {}
+    intake = settings.get("intake") or {}
+    target_env = settings.get("target_env")
+    parts = [
+        str(project.get("brief") or ""),
+        str(settings.get("intake_refined_brief") or ""),
+        str(intake.get("language") or ""),
+        str(intake.get("stack_libraries") or ""),
+        str(target_env.get("language") or "") if isinstance(target_env, dict) else "",
+    ]
+    return "\n".join(part for part in parts if part)
+
+
 def _call_structured(ctx: Any, prompt_name: str, payload: dict[str, Any], schema: dict[str, Any], tag: str, meta: dict[str, Any] | None = None, max_repairs: int = 3) -> dict[str, Any]:
     from .structured import StructuredOutputError, call_structured_json
     prompt = get_prompt(prompt_name)
-    messages = [{"role": "system", "content": prompt.text}, {"role": "user", "content": json.dumps(payload, indent=2)}]
+    # The supported list is injected at call time so a new adapter never needs a
+    # prompt edit, and the model can never invent a language (SS-LANGS).
+    system = f"{prompt.text}\n\n{language_support.supported_languages_block()}"
+    messages = [{"role": "system", "content": system}, {"role": "user", "content": json.dumps(payload, indent=2)}]
     try:
         return call_structured_json(ctx.client, "reasoner", messages, schema, tag=tag, meta={"job_id": ctx.job["id"], "prompts": [prompt.id], **(meta or {})}, max_repairs=max_repairs)
     except StructuredOutputError as exc:
@@ -208,7 +253,7 @@ def handle_decompose(ctx: Any) -> Any:
     node, project = ctx.node, ctx.project
     _workspace_root(ctx)
     brief = node.get("spec_text") or project.get("brief") or ""
-    target_stack = project.get("settings", {}).get("target_env", {}).get("language", "Python 3.12")
+    target_stack = _target_stack(project)
     limits = _size_limits(ctx)
     # X9: max_components_per_level (default 7), NOT the D2 candidate count.
     # D2 candidate count is used by handle_select_map, passed separately.
@@ -276,12 +321,24 @@ def handle_interfaces(ctx: Any) -> Any:
         return guard
     cm = node.get("contract") or {}
     brief = project.get("brief", "")
-    payload = {"brief": brief, "component_map": cm}
+    payload = {
+        "brief": brief,
+        "component_map": cm,
+        "language": language_registry.language_for(project).id,
+    }
     try:
         result = _call_structured(ctx, INTERFACES, payload, INTERFACES_SCHEMA, "interfaces")
     except RuntimeError as e:
         return _make_job_result(False, error=str(e))
     contract = result["contract"]
+    replaced_language = _normalise_contract_language(contract, project)
+    if replaced_language:
+        ctx.event(
+            "spec.contract_language_normalized",
+            f"Contract declared '{replaced_language}'; project language '{contract['language']}' kept",
+            level="warning",
+            data={"declared": replaced_language, "project_language": contract["language"]},
+        )
     ctx.store.update_node_contract(node["id"], contract)
     _write_contract(ws_root, node, contract)
     ctx.artifact("contract", json.dumps(contract, indent=2), f"interfaces_{node['name']}.json")
@@ -300,6 +357,24 @@ def handle_check_interfaces(ctx: Any) -> Any:
     if not contract:
         return _make_job_result(False, error="No contract found for node")
     code_findings = check_interfaces(contract)
+    platform_findings = [f for f in code_findings if f.code.startswith("SPEC3_PLATFORM")]
+    if platform_findings:
+        # Platform placement is a contract fact, not a scenario gap: the model
+        # cannot repair it by filling a gap, so fail deterministically instead
+        # of looping through repair rounds.
+        details = "; ".join(f.message for f in platform_findings)
+        ctx.event(
+            "spec.platform_violation",
+            f"Platform isolation violated: {details}",
+            level="error",
+            data={"findings": [str(f) for f in platform_findings]},
+        )
+        return _make_job_result(
+            False,
+            error=f"platform isolation violated: {details}",
+            findings=[str(f) for f in platform_findings],
+        )
+    code_findings = [f for f in code_findings if not f.code.startswith("SPEC3_PLATFORM")]
     if code_findings:
         gaps = []
         for f in code_findings:
@@ -351,7 +426,7 @@ def handle_component_spec(ctx: Any) -> Any:
         used = used or (node["name"] in component_info.get("consumes", []))
         if used:
             shared_entities.append(entity)
-    payload = {"component_name": node["name"], "objective": node.get("objective", ""), "shared_entities": shared_entities, "provides": component_info.get("provides", []), "consumes": component_info.get("consumes", []), "dependencies": node.get("depends_on", []), "target_stack": project.get("settings", {}).get("target_env", {}).get("language", "Python 3.12")}
+    payload = {"component_name": node["name"], "objective": node.get("objective", ""), "shared_entities": shared_entities, "provides": component_info.get("provides", []), "consumes": component_info.get("consumes", []), "dependencies": node.get("depends_on", []), "target_stack": _target_stack(project), "platform": component_info.get("platform", "any")}
     try:
         result = _call_structured(ctx, COMPONENT_SPEC, payload, COMPONENT_SPEC_SCHEMA, "component_spec")
     except RuntimeError as e:
@@ -493,18 +568,41 @@ def handle_clarify(ctx: Any) -> Any:
     ctx.check()
     project = ctx.project
     brief = project.get("brief", "")
-    target_stack = project.get("settings", {}).get("target_env", {}).get("language", "Python 3.12")
+    target_stack = _target_stack(project)
     payload = {"brief": brief, "target_stack": target_stack}
     try:
         result = _call_structured(ctx, CLARIFY, payload, CLARIFY_SCHEMA, "clarify")
     except RuntimeError as e:
         return _make_job_result(False, error=str(e))
     questions = result.get("questions", [])
+    detected = language_support.unsupported_languages_in(_language_context(project))
+    if detected:
+        # Never substitute: surface the request as an explicit owner question and
+        # keep the project's language untouched until the owner answers.
+        supported = ", ".join(language_support.supported_languages())
+        others = [q for q in questions if q.get("category") != "language"][:4]
+        merged = [{
+            "question": (
+                f"The brief asks for {', '.join(detected)}, which N-AI does not support yet. "
+                f"Which supported language should this project use? ({supported})"
+            ),
+            "default_answer": language_support.supported_languages()[0],
+            "category": "language",
+        }] + others
+        questions = [{**q, "id": f"Q{index}"} for index, q in enumerate(merged, 1)]
+        ctx.event(
+            "spec.unsupported_language",
+            f"Brief requests unsupported language(s): {', '.join(detected)}",
+            level="warning",
+            data={"requested": detected, "supported": language_support.supported_languages()},
+        )
     # Persist assumptions so the planner does not re-queue clarify forever.
     settings = dict(project.get("settings") or {})
     settings["clarified"] = True
     settings["clarify_questions"] = questions
     settings["assumptions"] = [q.get("default_answer") for q in questions if q.get("default_answer")]
+    if detected:
+        settings["language_request"] = detected
     ctx.store.update_project(project["id"], settings=settings)
     ctx.event("spec.clarify_done", f"Generated {len(questions)} clarification questions", level="info", data={"questions": questions})
     return _make_job_result(True, questions=questions, prompt_id=get_prompt(CLARIFY).id)

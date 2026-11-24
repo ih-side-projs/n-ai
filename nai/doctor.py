@@ -23,10 +23,11 @@ MODULES = (
     "nai.spec.plugin", "nai.build.plugin", "nai.tools.registry", "nai.web.app",
     "nai.eval.harness", "nai.service.daemon",
 )
-EXPECTED_SUBCOMMANDS = ("run", "mcp", "bench", "service", "doctor")
+EXPECTED_SUBCOMMANDS = ("run", "mcp", "bench", "service", "doctor", "project", "languages", "where", "relocate")
 PACKAGE_GLOBS = (
     "prompts/*.txt", "web/templates/*.html", "web/static/*.css", "web/static/*.js",
     "spec/prompts/*.txt", "spec/schemas/*.json", "build/prompts/*.txt", "store/migrations/*.sql",
+    "langs/knowledge/*/*.md",
 )
 REQUIRED_TEMPLATES = (
     "base.html", "projects.html", "project.html", "node.html", "node_edit.html",
@@ -109,7 +110,7 @@ def check_subcommands() -> CheckResult:
         detail.append(f"missing: {', '.join(missing)}")
     if errors:
         detail.extend(f"import failed: {k} ({v})" for k, v in errors.items())
-    return CheckResult("cli-subcommands", not missing and not errors, "; ".join(detail) or "run, mcp, bench, service, doctor")
+    return CheckResult("cli-subcommands", not missing and not errors, "; ".join(detail) or ", ".join(sorted(cli.SUBCOMMANDS)))
 
 
 def check_handlers() -> CheckResult:
@@ -242,6 +243,24 @@ def check_package_data() -> CheckResult:
 
 
 
+def check_language_support() -> CheckResult:
+    """Check that every registered language meets the runtime support criteria."""
+    langs = importlib.import_module("nai.langs")
+    problems: list[str] = []
+    for language_id in langs.registry.supported():
+        status = langs.support.support_status(language_id)
+        if not status.supported:
+            missing = ", ".join(status.missing_knowledge) or "toolchain probe"
+            problems.append(f"{language_id} ({missing})")
+    count = len(langs.registry.supported())
+    if not count:
+        problems.append("no adapters registered")
+    return CheckResult(
+        "language-support", not problems,
+        "; ".join(problems) or f"{count} language(s) supported: {', '.join(langs.support.supported_languages())}",
+    )
+
+
 def check_store() -> CheckResult:
     """Check store."""
     store_mod = importlib.import_module("nai.store.store")
@@ -279,6 +298,7 @@ CHECKS: tuple[tuple[str, Callable[[], CheckResult]], ...] = (
     ("artifact-kinds", check_artifact_kinds),
     ("schema-artifacts", check_schemas),
     ("package-data", check_package_data),
+    ("language-support", check_language_support),
     ("store-migrations", check_store),
     ("tool-registry", check_tool_registry),
 )

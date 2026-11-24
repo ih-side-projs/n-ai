@@ -129,7 +129,8 @@ Console scripts after installation:
 | `nai service exec SPEC.md` | submit a new `nai` instance to the service |
 | `nai where PROJECT` | show a project's stable slug, output root and manifest status |
 | `nai relocate PROJECT DIR` | verify the manifest and move a project to a new output root |
-| `nai project create NAME` | create a Store-backed project (`--output-dir`, `--brief`, `--json`) |
+| `nai project create NAME` | create a Store-backed project (`--output-dir`, `--brief`, `--language`, `--json`) |
+| `nai languages` | supported languages plus toolchain probes on this machine and named workers |
 | `nai doctor` / `nai --doctor` | offline integration self-check (imports, planners, handlers, schemas, assets) |
 | `python devswarm.py SPEC.md` | original v1 entry point |
 

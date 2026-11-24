@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from .. import manifest, paths
-from ..langs import registry
+from ..langs import knowledge, registry
 from .context_pack import assemble_context_pack
 from .escalation import raise_change_request
 from .prompts import get_prompt
@@ -299,9 +299,10 @@ def handle_author_tests(ctx: Any) -> Any:
             "role": "user",
             "content": (
                 f"{format_env_block(tenv)}\n\n"
+                f"{knowledge.block(adapter.id, 'author_tests')}\n\n"
                 f"Author {adapter.test_framework} tests for this component/integration node.\n"
                 f"Context JSON:\n```json\n{json.dumps(user_payload, indent=2, sort_keys=True)}\n```"
-            ),
+            ).replace("\n\n\n", "\n\n"),
         },
     ]
 
@@ -492,6 +493,7 @@ def handle_implement(ctx: Any) -> Any:
         parent_contract=parent_contract,
         workspace_root=ws_root,
         tools_section=tools_bundle.context_section,
+        job_kind="implement",
     )
     ctx.artifact("report", pack.text, f"context_pack_{node['name']}_implement.md")
 
@@ -794,11 +796,12 @@ def handle_integrate(ctx: Any) -> Any:
     task = (
         f"{prompt.text}\n\n"
         f"{format_env_block(tenv)}\n\n"
+        f"{knowledge.block(adapter.id, 'integrate')}\n\n"
         f"Parent node: `{(parent or {}).get('name', 'root')}`\n"
         f"Writable integration glue path: `{wiring_rel}`\n"
         f"Children:\n```json\n{json.dumps(child_summaries, indent=2)}\n```\n"
         f"Scenarios:\n```json\n{json.dumps((parent_contract or {}).get('scenarios') or [], indent=2)}\n```"
-    )
+    ).replace("\n\n\n", "\n\n")
 
     with ctx.ws.job_context(_job_context(node["id"], "integrate", ctx.job.get("attempt", 1), policy)):
         # D6: ConsultThreads side conversation allowed inside integrate, transcript stored as artifact

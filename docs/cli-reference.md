@@ -55,8 +55,11 @@ holds only the database, logs, artifacts and snapshots.
 
 ```
 nai project create <name> [--brief TEXT|--brief-file FILE] [--output-dir DIR]
-                          [--db PATH] [--json]
+                          [--language ID] [--db PATH] [--json]
 ```
+
+`--language` accepts only registered adapters (run `nai languages` for the
+list); one language per project. Omitting it uses `python`.
 
 Creates a project in the store with the deterministic layout
 (`<output-root>/<slug>/`, `.nai-project`, `.nai-manifest.json`). The output
@@ -64,6 +67,21 @@ root follows the same precedence as `where`/`relocate`; `--brief -` reads the
 brief from stdin. Exported projects reconstruct their tree on import:
 `SPEC.md`, `contract.json`, `specs/<node-path>/SPEC.md`, source/test files and
 a fresh manifest.
+
+## `nai languages` — supported languages and toolchains
+
+```
+nai languages [--json] [--no-probe] [--worker NAME=PATH ...]
+```
+
+Prints the languages the registry supports (adapter, knowledge pack and
+toolchain probe), then probes each declared tool (`python3 --version`,
+`pytest --version`, `ruff --version` for Python) on this machine and on every
+named worker root. Worker roots can also come from
+`NAI_LANGUAGE_WORKERS=name=path,name=path`. A worker root's `.venv/bin` and
+`bin` are searched before `PATH`, so a worker checkout's own tools win. The
+command exits non-zero when a language is incomplete or a required tool is
+missing, which makes it usable as a pre-flight check.
 
 ## `nai service` — background service
 

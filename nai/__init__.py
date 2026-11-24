@@ -35,6 +35,9 @@ try:
     from .project_cli import project_main as _project_main
 
     register_subcommand("project", _project_main)
+    from .langs_cli import languages_main as _languages_main
+
+    register_subcommand("languages", _languages_main)
 except Exception as _exc:
     _SUBCOMMAND_IMPORT_ERRORS["service/mcp/bench/doctor"] = f"{type(_exc).__name__}: {_exc}"
 

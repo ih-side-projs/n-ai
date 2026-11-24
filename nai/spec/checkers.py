@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .platforms import DEFAULT_PLATFORM, PLATFORMS, PORTABLE_PLATFORMS
+
 
 @dataclass(frozen=True)
 class Finding:
@@ -36,8 +38,34 @@ def _step_fields(step: dict[str, Any]) -> list[str]:
     return [str(f) for f in (step.get("fields") or [])]
 
 
+def check_platforms(contract: dict[str, Any]) -> list[Finding]:
+    """SPEC3_PLATFORM: portable components may not consume macOS-only components."""
+    findings: list[Finding] = []
+    components = {c["name"]: c for c in contract.get("components", []) if c.get("name")}
+    for name, comp in components.items():
+        platform = str(comp.get("platform") or DEFAULT_PLATFORM)
+        if platform not in PLATFORMS:
+            findings.append(Finding(
+                "contract.json", 0, "error", "SPEC3_PLATFORM_INVALID",
+                f"Component '{name}' declares platform '{platform}'; expected one of {', '.join(PLATFORMS)}",
+            ))
+            continue
+        if platform not in PORTABLE_PLATFORMS:
+            continue
+        for dep in comp.get("consumes", []) or []:
+            dep_platform = str((components.get(str(dep)) or {}).get("platform") or DEFAULT_PLATFORM)
+            if dep_platform not in PORTABLE_PLATFORMS:
+                findings.append(Finding(
+                    "contract.json", 0, "error", "SPEC3_PLATFORM",
+                    f"Component '{name}' ({platform}) consumes '{dep}' ({dep_platform}); "
+                    "isolate platform-specific code in leaf components and keep logic portable",
+                ))
+    return findings
+
+
 def check_interfaces(contract: dict[str, Any]) -> list[Finding]:
     findings: list[Finding] = []
+    findings.extend(check_platforms(contract))
     entities = {e["name"]: e for e in contract.get("entities", [])}
     components = {c["name"]: c for c in contract.get("components", [])}
     scenarios = contract.get("scenarios", [])

@@ -91,7 +91,12 @@
 
     <div class="content-grid">
       <label>Programming language
-        <input type="text" name="language" placeholder="Python 3.12, TypeScript, Rust…">
+        <select name="language">
+          {% for language in languages %}
+          <option value="{{ language.id }}">{{ language.display_name }} — {{ language.stack_hint }}</option>
+          {% endfor %}
+        </select>
+        <span class="tiny muted">One language per project; only registered adapters are listed.</span>
       </label>
       <label>Interface type
         <select name="interface_type">

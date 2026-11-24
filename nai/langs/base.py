@@ -75,6 +75,23 @@ class Command:
     network: bool = True
 
 
+@dataclass(frozen=True)
+class ToolCheck:
+    """One toolchain binary an adapter needs, and how to ask for its version.
+
+    ``argv`` is the full command used for the probe (``("python3", "--version")``);
+    ``argv[0]`` is resolved with ``shutil.which``.  ``fallback`` lists alternative
+    binary names tried in order when ``argv[0]`` is absent (for example
+    ``("python", "py")`` on Windows).  ``required`` tools make the probe fail when
+    they are missing; optional ones are reported only.
+    """
+
+    name: str
+    argv: tuple[str, ...]
+    required: bool = True
+    fallback: tuple[str, ...] = ()
+
+
 @runtime_checkable
 class LanguageAdapter(Protocol):
     """Everything the pipeline needs to know about one language."""
@@ -84,6 +101,9 @@ class LanguageAdapter(Protocol):
     test_framework: str
     extensions: tuple[str, ...]
     stub_marker: str
+    stack_hint: str
+    style_guide: str
+    toolchain: tuple[ToolCheck, ...]
 
     # -- layout ------------------------------------------------------------
     def package_name(self, project: dict[str, Any]) -> str: ...

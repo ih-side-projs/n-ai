@@ -20,14 +20,12 @@ from nai.spec.plugin import register as register_spec
 from nai.store import Store
 from nai.testing.stub_server import StubServer, call, reply
 
-IMPORTED_SPEC = """# Tiny Library
-
-Build a two-component Python library:
-
-- `text-normalizer` provides `normalize_text(text: str) -> str`.
-- `word-counter` provides `count_words(text: str) -> int`.
-- Integration scenario S1: normalize text, then count its words.
-"""
+FIXTURE = json.loads(
+    (Path(__file__).resolve().parent / "fixtures" / "langs" / "python" / "project.json").read_text(
+        encoding="utf-8"
+    )
+)
+IMPORTED_SPEC = FIXTURE["brief"]
 
 NORMALIZER_SOURCE = (
     "def normalize_text(text: str) -> str:\n"
@@ -180,14 +178,9 @@ def test_python_library_pipeline_imported_spec_to_done(tmp_path: Path):
             "Tiny Library", "Imported spec", workspace_path=tmp_path / "ws",
             settings={
                 "model_profile": "stub",
-                "package_name": "tiny_lib",
                 "intake_complete": True,
                 "clarified": True,
-                "target_env": {
-                    "type_checker": "none",
-                    "packages": ["pytest==9.2.0"],
-                    "lint_rules": [],
-                },
+                **FIXTURE["settings"],
             },
         )
         store.create_node(pid, "root", "system", spec_text=IMPORTED_SPEC, objective="Tiny library root")
