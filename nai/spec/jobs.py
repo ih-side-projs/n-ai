@@ -6,6 +6,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from .. import layout, manifest, paths
 from .checkers import check_interfaces, lint_spec
 from .prompts import (
     CHECK_INTERFACES,
@@ -90,25 +91,56 @@ def _workspace_root(ctx: Any) -> Path:
         raise RuntimeError("Project has no workspace_path configured")
     return Path(wp)
 
+def _guard_manifest(ctx: Any, ws_root: Path) -> Any | None:
+    force = bool((ctx.job.get("input_ref") or {}).get("force_manifest"))
+    mismatches = manifest.detect_hand_edits(ctx.store, ctx.project, force=force)
+    if mismatches and not force:
+        details = ", ".join(f"{m.relpath} ({m.reason})" for m in mismatches[:5])
+        return _make_job_result(False, error=f"hand edit detected: {details}")
+    return None
+
+
 def _spec_dir(ws_root: Path, node: dict[str, Any]) -> Path:
-    if node.get("parent_id") is None:
-        return ws_root
-    return ws_root / f"SPEC-{node['name']}"
+    return layout.node_dir(ws_root, str(node.get("path") or ""))
 
 def _read_spec_file(ws_root: Path, node: dict[str, Any]) -> str:
-    path = _spec_dir(ws_root, node) / "SPEC.md"
+    path = layout.spec_path(ws_root, str(node.get("path") or ""))
     return path.read_text(encoding="utf-8") if path.is_file() else ""
 
 def _write_spec_file(ws_root: Path, node: dict[str, Any], content: str) -> Path:
-    path = _spec_dir(ws_root, node) / "SPEC.md"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content, encoding="utf-8")
+    path = layout.spec_path(ws_root, str(node.get("path") or ""))
+    paths.write_atomic(path, content, root=ws_root)
+    try:
+        manifest.record(
+            ws_root, layout.relative_to_root(ws_root, path),
+            node_id=node["id"], stage="spec", content=content,
+        )
+    except (OSError, ValueError):
+        pass
     return path
 
 def _write_contract(ws_root: Path, node: dict[str, Any], contract: dict[str, Any]) -> Path:
-    path = _spec_dir(ws_root, node) / "interfaces.json"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(contract, indent=2, sort_keys=True), encoding="utf-8")
+    text = json.dumps(contract, indent=2, sort_keys=True)
+    path = layout.node_dir(ws_root, str(node.get("path") or "")) / "interfaces.json"
+    paths.write_atomic(path, text, root=ws_root)
+    # The root contract is also the canonical project-level contract.json.
+    if node.get("parent_id") is None:
+        root_path = layout.contract_path(ws_root)
+        paths.write_atomic(root_path, text, root=ws_root)
+        try:
+            manifest.record(
+                ws_root, layout.relative_to_root(ws_root, root_path),
+                node_id=node["id"], stage="contract", content=text,
+            )
+        except (OSError, ValueError):
+            pass
+    try:
+        manifest.record(
+            ws_root, layout.relative_to_root(ws_root, path),
+            node_id=node["id"], stage="contract", content=text,
+        )
+    except (OSError, ValueError):
+        pass
     return path
 
 def _get_parent_contract(ctx: Any, node: dict[str, Any]) -> dict[str, Any] | None:
@@ -239,6 +271,9 @@ def handle_interfaces(ctx: Any) -> Any:
     ctx.check()
     node, project = ctx.node, ctx.project
     ws_root = _workspace_root(ctx)
+    guard = _guard_manifest(ctx, ws_root)
+    if guard is not None:
+        return guard
     cm = node.get("contract") or {}
     brief = project.get("brief", "")
     payload = {"brief": brief, "component_map": cm}
@@ -297,6 +332,9 @@ def handle_component_spec(ctx: Any) -> Any:
     ctx.check()
     node, project = ctx.node, ctx.project
     ws_root = _workspace_root(ctx)
+    guard = _guard_manifest(ctx, ws_root)
+    if guard is not None:
+        return guard
     parent_contract = _get_parent_contract(ctx, node)
     if not parent_contract:
         return _make_job_result(False, error="Parent contract not found")

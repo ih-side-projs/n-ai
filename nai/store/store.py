@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from .. import layout, manifest, paths
 from .errors import (
     DependencyCycleError,
     DependencyError,
@@ -256,6 +257,84 @@ class Store:
                     self.conn.execute("PRAGMA foreign_keys=ON")
             current = version
             expected = current + 1
+        if self.schema_version >= 6:
+            self._backfill_layout()
+
+    def _backfill_layout(self) -> None:
+        """Deterministically fill slug/output_root columns for pre-0006 rows."""
+        if self.read_only:
+            return
+        with self._transaction() as conn:
+            projects = [dict(row) for row in conn.execute(
+                "SELECT id, name, workspace_path, slug, output_root FROM projects ORDER BY created_at, id"
+            ).fetchall()]
+            used: dict[str, set[str]] = {}
+            for project in projects:
+                workspace = Path(project["workspace_path"]).expanduser().resolve()
+                output_root = project.get("output_root") or str(workspace.parent)
+                slug = project.get("slug")
+                taken = used.setdefault(output_root, set())
+                if not slug:
+                    slug = layout.unique_slug(workspace.name or project["name"], taken)
+                    conn.execute(
+                        "UPDATE projects SET slug=?, output_root=? WHERE id=?",
+                        (slug, output_root, project["id"]),
+                    )
+                else:
+                    conn.execute(
+                        "UPDATE projects SET output_root=? WHERE id=? AND output_root IS NULL",
+                        (output_root, project["id"]),
+                    )
+                taken.add(str(slug))
+                project["slug"], project["output_root"] = slug, output_root
+
+            for project in projects:
+                rows = [dict(row) for row in conn.execute(
+                    "SELECT id, parent_id, name, slug FROM nodes WHERE project_id=? ORDER BY created_at, id",
+                    (project["id"],),
+                ).fetchall()]
+                by_parent: dict[str | None, list[dict[str, Any]]] = {}
+                for row in rows:
+                    by_parent.setdefault(row.get("parent_id"), []).append(row)
+                for siblings in by_parent.values():
+                    taken: set[str] = set()
+                    for row in siblings:
+                        slug = row.get("slug") or layout.unique_slug(row["name"], taken)
+                        if not row.get("slug"):
+                            conn.execute("UPDATE nodes SET slug=? WHERE id=?", (slug, row["id"]))
+                        taken.add(str(slug))
+        # Best-effort marker/manifest creation for projects that predate the layout.
+        for project in self.list_projects():
+            workspace = Path(project["workspace_path"]).expanduser()
+            if not workspace.is_dir():
+                continue
+            try:
+                if paths.read_marker(workspace) is None:
+                    paths.write_marker(
+                        workspace, project_id=project["id"],
+                        slug=str(project.get("slug") or layout.slugify(workspace.name)),
+                        name=str(project.get("name") or ""),
+                    )
+                if not layout.manifest_path(workspace).is_file():
+                    manifest.write(workspace, manifest.scan(workspace))
+            except OSError:
+                continue
+
+    def _has_column(self, table: str, column: str) -> bool:
+        return any(row["name"] == column for row in self.conn.execute(f"PRAGMA table_info({table})").fetchall())
+
+    def _node_path_for(self, conn: sqlite3.Connection, node_id: str) -> str:
+        """Slug path below the root (root -> ``""``)."""
+        has_slug = self._has_column("nodes", "slug")
+        select = "SELECT id, parent_id, name, slug FROM nodes WHERE id=?" if has_slug else (
+            "SELECT id, parent_id, name, NULL AS slug FROM nodes WHERE id=?"
+        )
+        parts: list[str] = []
+        row = conn.execute(select, (node_id,)).fetchone()
+        while row is not None and row["parent_id"] is not None:
+            parts.append(str(row["slug"] or layout.slugify(row["name"])))
+            row = conn.execute(select, (row["parent_id"],)).fetchone()
+        return layout.node_path(list(reversed(parts)))
 
     def _execute_sql_script(self, script: str) -> None:
         """Execute a migration without executescript's implicit transaction commit."""
@@ -354,19 +433,77 @@ class Store:
         *,
         settings: dict[str, Any] | None = None,
         project_id: str | None = None,
+        output_root: str | Path | None = None,
     ) -> str:
         project_id = project_id or new_id()
-        workspace = Path(workspace_path).expanduser().resolve() if workspace_path else (
-            self.db_path.parent / "workspaces" / project_id
-        )
-        workspace.mkdir(parents=True, exist_ok=True)
+        settings_obj = dict(settings or {})
+        if not self._has_column("projects", "slug"):
+            # Pre-0006 schema (migration tests): keep the historical behaviour.
+            workspace = Path(workspace_path).expanduser().resolve() if workspace_path else (
+                self.db_path.parent / "workspaces" / project_id
+            )
+            workspace.mkdir(parents=True, exist_ok=True)
+            with self._transaction() as conn:
+                conn.execute(
+                    """INSERT INTO projects(id, name, brief, workspace_path, status, created_at, settings_json)
+                       VALUES (?, ?, ?, ?, 'active', ?, ?)""",
+                    (project_id, name, brief, str(workspace), utc_now(), _json_object(settings_obj, "settings")),
+                )
+                self._insert_event(conn, project_id, event_type="project.created", message=f"Project '{name}' created")
+            return project_id
+        if workspace_path is not None:
+            # Backward-compatible explicit project root (legacy callers/tests).
+            workspace = Path(workspace_path).expanduser().resolve()
+            output_root_path = workspace.parent
+            if self.conn.execute("SELECT 1 FROM projects WHERE workspace_path=?", (str(workspace),)).fetchone():
+                raise StoreError(f"workspace already belongs to a project: {workspace}")
+            existing = {row["slug"] for row in self.conn.execute(
+                "SELECT slug FROM projects WHERE output_root=?", (str(output_root_path),)
+            ).fetchall() if row["slug"]}
+            slug = layout.unique_slug(workspace.name, existing)
+            legacy = True
+        else:
+            output_root_path = paths.resolve_output_root(
+                output_root, settings=settings_obj, db_path=self.db_path,
+            )
+            existing = {row["slug"] for row in self.conn.execute(
+                "SELECT slug FROM projects WHERE output_root=?", (str(output_root_path),)
+            ).fetchall() if row["slug"]}
+            try:
+                existing |= {child.name for child in output_root_path.iterdir()}
+            except OSError:
+                pass
+            slug = layout.unique_slug(name, existing)
+            workspace = layout.project_root(output_root_path, slug)
+            legacy = False
+
+        reason = paths.dangerous_root_reason(workspace)
+        if reason:
+            raise paths.LayoutError(reason)
+        if legacy:
+            workspace.mkdir(parents=True, exist_ok=True)
+            if paths.read_marker(workspace) is None:
+                paths.write_marker(workspace, project_id=project_id, slug=slug, name=name)
+        else:
+            workspace = paths.prepare_project_dir(
+                output_root_path, slug, project_id=project_id, name=name,
+            )
+        if not layout.manifest_path(workspace).exists():
+            manifest.write(workspace, {})
+
         with self._transaction() as conn:
             conn.execute(
-                """INSERT INTO projects(id, name, brief, workspace_path, status, created_at, settings_json)
-                   VALUES (?, ?, ?, ?, 'active', ?, ?)""",
-                (project_id, name, brief, str(workspace), utc_now(), _json_object(settings if settings is not None else {}, "settings")),
+                """INSERT INTO projects(id, name, brief, workspace_path, slug, output_root,
+                                         status, created_at, settings_json)
+                   VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?)""",
+                (project_id, name, brief, str(workspace), slug, str(output_root_path),
+                 utc_now(), _json_object(settings_obj, "settings")),
             )
-            self._insert_event(conn, project_id, event_type="project.created", message=f"Project '{name}' created")
+            self._insert_event(
+                conn, project_id, event_type="project.created",
+                message=f"Project '{name}' created",
+                data={"slug": slug, "output_root": str(output_root_path), "workspace_path": str(workspace)},
+            )
         return project_id
 
     def get_project(self, project_id: str) -> dict[str, Any] | None:
@@ -428,6 +565,78 @@ class Store:
         """BLD-12 alias used by the build pipeline after root integration passes."""
         self.set_project_status(project_id, status)
 
+    def find_project(self, query: str) -> dict[str, Any] | None:
+        """Resolve a project by id, slug or name (id wins, then slug, then name)."""
+        for column in ("id", "slug"):
+            row = self.conn.execute(f"SELECT id FROM projects WHERE {column}=?", (query,)).fetchone()
+            if row is not None:
+                return self.get_project(row["id"])
+        row = self.conn.execute(
+            "SELECT id FROM projects WHERE lower(name)=lower(?) ORDER BY created_at, id LIMIT 1", (query,)
+        ).fetchone()
+        return self.get_project(row["id"]) if row is not None else None
+
+    def update_node_name(self, node_id: str, name: str) -> None:
+        """Rename a node without changing its slug or moving any files."""
+        if not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", name):
+            raise ValueError("node name must be lowercase-hyphenated")
+        row = self.conn.execute("SELECT project_id, name FROM nodes WHERE id=?", (node_id,)).fetchone()
+        if row is None:
+            raise KeyError(f"unknown node: {node_id}")
+        if row["name"] == name:
+            return
+        with self._transaction() as conn:
+            conn.execute("UPDATE nodes SET name=?, updated_at=? WHERE id=?", (name, utc_now(), node_id))
+            self._insert_event(
+                conn, row["project_id"], node_id=node_id, event_type="node.renamed",
+                message=f"Node renamed from '{row['name']}' to '{name}'",
+                data={"old_name": row["name"], "new_name": name},
+            )
+
+    def relocate_project(self, project_id: str, new_output_root: str | Path, *, force: bool = False) -> Path:
+        """Move a project tree to ``<new_output_root>/<slug>`` after manifest verification."""
+        project = self.get_project(project_id)
+        if project is None:
+            raise KeyError(f"unknown project: {project_id}")
+        current = Path(project["workspace_path"]).expanduser().resolve()
+        root = paths.validate_output_root(new_output_root)
+        target = layout.project_root(root, str(project["slug"]))
+        if target == current:
+            return current
+        reason = paths.dangerous_root_reason(target)
+        if reason:
+            raise paths.LayoutError(reason)
+        mismatches = manifest.verify(current)
+        if mismatches and not force:
+            details = ", ".join(f"{m.relpath} ({m.reason})" for m in mismatches[:5])
+            raise StoreError(f"manifest verification failed; refusing to relocate: {details}")
+        if mismatches and force:
+            for item in mismatches:
+                manifest.force_accept(current, item.relpath)
+        if target.is_symlink():
+            raise StoreError(f"relocation target must not be a symlink: {target}")
+        if target.exists():
+            if any(target.iterdir()):
+                raise StoreError(f"relocation target is not empty: {target}")
+            target.rmdir()
+        shutil.move(str(current), str(target))
+        with self._transaction() as conn:
+            conn.execute(
+                "UPDATE projects SET workspace_path=?, output_root=? WHERE id=?",
+                (str(target), str(root), project_id),
+            )
+            self._insert_event(
+                conn, project_id, event_type="project.relocated",
+                message=f"Project moved to {target}",
+                data={"from": str(current), "to": str(target), "output_root": str(root)},
+            )
+        if paths.read_marker(target) is None:
+            paths.write_marker(
+                target, project_id=project_id, slug=str(project["slug"]),
+                name=str(project.get("name") or ""),
+            )
+        return target
+
     def create_node(
         self,
         project_id: str,
@@ -449,17 +658,36 @@ class Store:
         node_id = node_id or new_id()
         now = utc_now()
         contract_json = _json_object(contract if contract is not None else {}, "contract")
+        project = self.get_project(project_id)
+        if project is None:
+            raise KeyError(f"unknown project: {project_id}")
         with self._transaction() as conn:
             if conn.execute("SELECT 1 FROM projects WHERE id=?", (project_id,)).fetchone() is None:
                 raise KeyError(f"unknown project: {project_id}")
             self._validate_dependencies(conn, project_id, parent_id, node_id, depends_on)
-            conn.execute(
-                """INSERT INTO nodes(id, project_id, parent_id, kind, name, objective, spec_text,
-                       contract_json, status, attempts, test_command, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'draft', 0, ?, ?, ?)""",
-                (node_id, project_id, parent_id, kind, name, objective, spec_text, contract_json,
-                 test_command, now, now),
-            )
+            has_slug = self._has_column("nodes", "slug")
+            if has_slug:
+                siblings = conn.execute(
+                    "SELECT slug FROM nodes WHERE project_id=? AND parent_id IS ?",
+                    (project_id, parent_id),
+                ).fetchall()
+                slug = layout.unique_slug(name, [row["slug"] for row in siblings if row["slug"]])
+                conn.execute(
+                    """INSERT INTO nodes(id, project_id, parent_id, kind, name, objective, spec_text,
+                           contract_json, status, attempts, test_command, slug, created_at, updated_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'draft', 0, ?, ?, ?, ?)""",
+                    (node_id, project_id, parent_id, kind, name, objective, spec_text, contract_json,
+                     test_command, slug, now, now),
+                )
+            else:
+                slug = layout.slugify(name)
+                conn.execute(
+                    """INSERT INTO nodes(id, project_id, parent_id, kind, name, objective, spec_text,
+                           contract_json, status, attempts, test_command, created_at, updated_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'draft', 0, ?, ?, ?)""",
+                    (node_id, project_id, parent_id, kind, name, objective, spec_text, contract_json,
+                     test_command, now, now),
+                )
             for ordinal, dependency_id in enumerate(depends_on):
                 conn.execute(
                     "INSERT INTO node_dependencies(node_id, dependency_node_id, ordinal) VALUES (?, ?, ?)",
@@ -467,7 +695,21 @@ class Store:
                 )
             self._recompute_project_hashes(conn, project_id)
             self._insert_event(conn, project_id, node_id=node_id, event_type="node.created",
-                               message=f"Node '{name}' created", data={"kind": kind, "parent_id": parent_id})
+                               message=f"Node '{name}' created",
+                               data={"kind": kind, "parent_id": parent_id, "slug": slug})
+        workspace = Path(project["workspace_path"])
+        path = self._node_path_for(self.conn, node_id)
+        spec_text_to_write = spec_text or (str(project.get("brief") or "") if parent_id is None else "")
+        if spec_text_to_write:
+            spec_file = layout.spec_path(workspace, path)
+            paths.write_atomic(spec_file, spec_text_to_write, root=workspace)
+            try:
+                manifest.record(
+                    workspace, layout.relative_to_root(workspace, spec_file),
+                    node_id=node_id, stage="spec", content=spec_text_to_write,
+                )
+            except (OSError, ValueError):
+                pass
         return node_id
 
     def get_node(self, node_id: str) -> dict[str, Any] | None:
@@ -479,6 +721,7 @@ class Store:
         item["depends_on"] = [r["dependency_node_id"] for r in self.conn.execute(
             "SELECT dependency_node_id FROM node_dependencies WHERE node_id=? ORDER BY ordinal", (node_id,)
         ).fetchall()]
+        item["path"] = self._node_path_for(self.conn, node_id)
         return item
 
     def list_nodes(self, project_id: str, *, parent_id: str | None = None) -> list[dict[str, Any]]:
@@ -509,6 +752,20 @@ class Store:
             self._recompute_project_hashes(conn, row["project_id"])
             self._insert_event(conn, row["project_id"], node_id=node_id, event_type="node.spec_changed" if field == "spec_text" else "node.contract_changed",
                                message="Node specification updated" if field == "spec_text" else "Node contract updated")
+        if field == "spec_text":
+            project = self.get_project(row["project_id"])
+            node = self.get_node(node_id)
+            if project and node and project.get("workspace_path"):
+                workspace = Path(project["workspace_path"])
+                path = layout.spec_path(workspace, str(node.get("path") or ""))
+                try:
+                    paths.write_atomic(path, value, root=workspace)
+                    manifest.record(
+                        workspace, layout.relative_to_root(workspace, path),
+                        node_id=node_id, stage="spec", content=value,
+                    )
+                except (OSError, ValueError):
+                    pass
 
     def set_node_dependencies(self, node_id: str, depends_on: Sequence[str]) -> None:
         with self._transaction() as conn:
@@ -1335,12 +1592,12 @@ class Store:
         source = Path(source).expanduser().resolve()
         with _BundleReader(source) as bundle:
             try:
-                manifest = json.loads(bundle.read("manifest.json").decode("utf-8"))
+                bundle_manifest = json.loads(bundle.read("manifest.json").decode("utf-8"))
             except Exception as exc:
                 raise ExportImportError(f"cannot read manifest: {exc}") from exc
-            if manifest.get("format") != "nai-project-export" or manifest.get("format_version") != 1:
+            if bundle_manifest.get("format") != "nai-project-export" or bundle_manifest.get("format_version") != 1:
                 raise ExportImportError("unsupported project export format/version")
-            tables = manifest.get("tables")
+            tables = bundle_manifest.get("tables")
             if not isinstance(tables, dict) or not isinstance(tables.get("projects"), list) or len(tables["projects"]) != 1:
                 raise ExportImportError("manifest must contain exactly one project")
             original_project = tables["projects"][0]
@@ -1349,12 +1606,30 @@ class Store:
             if self.conn.execute("SELECT 1 FROM projects WHERE id=?", (new_project_id,)).fetchone():
                 raise ExportImportError(f"project id already exists: {new_project_id}")
             if workspace_path is None:
-                base_name = re.sub(r"[^A-Za-z0-9._-]+", "-", original_project.get("name", "project")).strip(".-") or "project"
-                workspace = (self.db_path.parent / "workspaces" / f"{base_name}-{new_project_id}").resolve()
+                output_root = paths.validate_output_root(
+                    original_project.get("output_root") or paths.default_output_root(self.db_path)
+                )
+                existing = {row["slug"] for row in self.conn.execute(
+                    "SELECT slug FROM projects WHERE output_root=?", (str(output_root),)
+                ).fetchall() if row["slug"]}
+                slug = layout.unique_slug(
+                    str(original_project.get("slug") or original_project.get("name") or "project"), existing,
+                )
+                workspace = layout.project_root(output_root, slug)
             else:
                 workspace = Path(workspace_path).expanduser().resolve()
+                output_root = workspace.parent
+                existing = {row["slug"] for row in self.conn.execute(
+                    "SELECT slug FROM projects WHERE output_root=?", (str(output_root),)
+                ).fetchall() if row["slug"]}
+                slug = layout.unique_slug(workspace.name, existing)
             workspace_existed = workspace.exists()
             workspace.mkdir(parents=True, exist_ok=True)
+            if paths.read_marker(workspace) is None:
+                paths.write_marker(workspace, project_id=new_project_id, slug=slug,
+                                   name=str(original_project.get("name") or ""))
+            if not layout.manifest_path(workspace).is_file():
+                manifest.write(workspace, {})
 
             # Generate new globally unique IDs for every primary-keyed project row.
             id_maps: dict[str, dict[str, str]] = {}
@@ -1365,20 +1640,29 @@ class Store:
             try:
                 with self._transaction() as conn:
                     p = dict(original_project)
-                    p.update(id=new_project_id, workspace_path=str(workspace))
+                    p.update(id=new_project_id, workspace_path=str(workspace), slug=slug,
+                             output_root=str(output_root))
                     conn.execute(
-                        "INSERT INTO projects(id,name,brief,workspace_path,status,created_at,settings_json) VALUES (?,?,?,?,?,?,?)",
-                        tuple(p[k] for k in ("id", "name", "brief", "workspace_path", "status", "created_at", "settings_json")),
+                        "INSERT INTO projects(id,name,brief,workspace_path,slug,output_root,status,created_at,settings_json) "
+                        "VALUES (?,?,?,?,?,?,?,?,?)",
+                        tuple(p[k] for k in ("id", "name", "brief", "workspace_path", "slug", "output_root",
+                                             "status", "created_at", "settings_json")),
                     )
+                    sibling_slugs: dict[str | None, set[str]] = {}
                     for row in tables.get("nodes", []):
+                        parent = row.get("parent_id")
+                        taken = sibling_slugs.setdefault(parent, set())
+                        node_slug = row.get("slug") or layout.unique_slug(str(row["name"]), taken)
+                        taken.add(str(node_slug))
                         conn.execute(
                             """INSERT INTO nodes(id,project_id,parent_id,kind,name,objective,spec_text,contract_json,status,
-                               content_hash,built_hash,attempts,test_command,created_at,updated_at)
-                               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                               content_hash,built_hash,attempts,test_command,slug,created_at,updated_at)
+                               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                             (id_maps["nodes"][row["id"]], new_project_id,
                              id_maps["nodes"].get(row.get("parent_id")) if row.get("parent_id") else None,
                              row["kind"], row["name"], row["objective"], row["spec_text"], row["contract_json"], row["status"],
-                             row.get("content_hash"), row.get("built_hash"), row["attempts"], row.get("test_command"), row["created_at"], row["updated_at"]),
+                             row.get("content_hash"), row.get("built_hash"), row["attempts"], row.get("test_command"),
+                             node_slug, row["created_at"], row["updated_at"]),
                         )
                     for row in tables.get("node_dependencies", []):
                         conn.execute(
@@ -1413,7 +1697,7 @@ class Store:
                              row["time"], row["level"], row["type"], row["message"], row["data_json"]),
                         )
                     for row in tables.get("artifacts", []):
-                        bundle_name = manifest.get("artifact_files", {}).get(row["id"])
+                        bundle_name = bundle_manifest.get("artifact_files", {}).get(row["id"])
                         if not bundle_name:
                             raise ExportImportError(f"artifact file mapping missing for {row['id']}")
                         bundle_relative = _safe_relative_path(bundle_name).as_posix()

@@ -27,6 +27,11 @@ try:
     register_subcommand("mcp", _mcp_main)
     register_subcommand("bench", _bench_main)
     register_subcommand("doctor", _doctor_cli)
+    from .layout_cli import relocate_main as _relocate_main
+    from .layout_cli import where_main as _where_main
+
+    register_subcommand("where", _where_main)
+    register_subcommand("relocate", _relocate_main)
 except Exception as _exc:
     _SUBCOMMAND_IMPORT_ERRORS["service/mcp/bench/doctor"] = f"{type(_exc).__name__}: {_exc}"
 

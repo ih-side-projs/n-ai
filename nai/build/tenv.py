@@ -322,7 +322,10 @@ class TargetEnvManager:
             # Allowlist entries suppress error escalation back to default for matching module/message
             cleaned = pat.strip()
             if cleaned:
-                filters.append(f"default::{cleaned}")
+                # -W / PYTHONWARNINGS format is action:message:category:module:lineno.
+                # The allowlist entry is a message prefix, so it belongs in the
+                # message slot: `default:<message>::`.
+                filters.append(f"default:{cleaned}::")
         return filters
 
     def wrap_test_command(

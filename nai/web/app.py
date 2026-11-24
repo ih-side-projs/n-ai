@@ -64,11 +64,18 @@ class WebSettings:
     bearer_token: str | None = None
     event_poll_seconds: float = 1.0
     max_view_bytes: int = 1_000_000
+    output_roots: tuple[Path, ...] = ()
 
     @classmethod
     def from_env(cls, database_path: str | Path | None = None) -> WebSettings:
         db_path = Path(database_path or os.environ.get("NAI_DB_PATH", ".nai/nai.sqlite3")).expanduser().resolve()
         status = os.environ.get("NAI_RUNNER_STATUS_FILE")
+        raw_roots = os.environ.get("NAI_OUTPUT_ROOTS", "")
+        output_roots = tuple(
+            Path(item).expanduser().resolve()
+            for item in raw_roots.split(os.pathsep)
+            if item.strip()
+        )
         return cls(
             database_path=db_path,
             llama_swap_url=os.environ.get("NAI_LLAMA_SWAP_URL") or os.environ.get("LLAMA_SWAP_URL"),
@@ -76,6 +83,7 @@ class WebSettings:
             runner_status_file=Path(status).expanduser().resolve() if status else None,
             bearer_token=os.environ.get("NAI_WEB_TOKEN"),
             event_poll_seconds=max(0.25, float(os.environ.get("NAI_WEB_EVENT_POLL_SECONDS", "1"))),
+            output_roots=output_roots,
         )
 
 
@@ -114,6 +122,7 @@ def create_app(
             bearer_token=settings.bearer_token,
             event_poll_seconds=max(0.25, settings.event_poll_seconds),
             max_view_bytes=settings.max_view_bytes,
+            output_roots=tuple(Path(p).expanduser().resolve() for p in settings.output_roots),
         )
 
     app = FastAPI(title="N-AI", version="0.1.0", docs_url="/api/docs", redoc_url=None)
@@ -329,6 +338,7 @@ def create_app(
             "projects": projects,
             "archived_count": archived_count,
             "show_archived": show,
+            "output_roots": [str(path) for path in settings.output_roots],
             "active_page": "projects",
         })
 
@@ -356,6 +366,7 @@ def create_app(
         stack_libraries: str = Form(""),
         accessibility_security: str = Form(""),
         testing_expectations: str = Form(""),
+        output_root: str = Form(""),
         spec_file: UploadFile | None = File(None),
     ):
         """Create a project with structured Info Gathering guardrails."""
@@ -395,9 +406,23 @@ def create_app(
         if uploaded_spec:
             project_settings["intake_complete"] = True
             project_settings["clarified"] = True
+        selected_root: Path | None = None
+        if output_root.strip():
+            candidate = Path(output_root).expanduser().resolve()
+            allowed = [Path(item).expanduser().resolve() for item in settings.output_roots]
+            if not any(candidate == root or root in candidate.parents for root in allowed):
+                raise HTTPException(status_code=400, detail="output root is not allowed")
+            selected_root = candidate
+        elif settings.output_roots:
+            selected_root = settings.output_roots[0]
         store = Store(settings.database_path, read_only=False)
         try:
-            pid = store.create_project(name, description, settings=project_settings)
+            try:
+                pid = store.create_project(
+                    name, description, settings=project_settings, output_root=selected_root,
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
             root_id = store.create_node(
                 pid, "root", "system",
                 objective=description or f"Root specification for {name}",

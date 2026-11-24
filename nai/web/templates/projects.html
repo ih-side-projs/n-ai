@@ -73,6 +73,14 @@
     <label>Project name
       <input type="text" name="name" placeholder="e.g. Task Tracker" required maxlength="200">
     </label>
+    {% if output_roots %}
+    <label>Output folder
+      <select name="output_root">
+        {% for root in output_roots %}<option value="{{ root }}">{{ root }}</option>{% endfor %}
+      </select>
+      <span class="tiny muted">Only folders configured in NAI_OUTPUT_ROOTS can be selected.</span>
+    </label>
+    {% endif %}
     <label>Project description
       <textarea name="brief" rows="8" class="spec-textarea wide-textarea" placeholder="Describe what you want to build, why, and what success looks like."></textarea>
     </label>

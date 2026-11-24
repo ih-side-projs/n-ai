@@ -108,7 +108,7 @@ def test_workspace_file_browser_and_traversal_protection(web_db):
     client = TestClient(create_app(db))
 
     listed = client.get(f"/api/projects/{project_id}/files").json()["files"]
-    assert [entry["path"] for entry in listed] == ["README.md"]
+    assert [entry["path"] for entry in listed] == ["README.md", "SPEC.md"]
     viewed = client.get(f"/projects/{project_id}/files/README.md")
     assert viewed.status_code == 200
     assert "Read me." in viewed.text
@@ -155,7 +155,7 @@ def test_project_files_skips_hidden_paths_and_safe_path_rejects_symlinks(web_db,
     (workspace / "visible.txt").write_text("visible")
     (workspace / ".private").mkdir()
     (workspace / ".private" / "secret.txt").write_text("secret")
-    assert [f["path"] for f in _list_project_files(workspace)] == ["visible.txt"]
+    assert [f["path"] for f in _list_project_files(workspace)] == ["SPEC.md", "visible.txt"]
     with pytest.raises(Exception):
         _safe_workspace_path(workspace, "../outside", allow_hidden=False)
 

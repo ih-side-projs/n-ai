@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import ast
-import keyword
 import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+from .. import layout
 
 
 @dataclass(frozen=True)
@@ -25,29 +26,19 @@ class StubResult:
 
 def slugify_module(name: str) -> str:
     """Convert a hyphenated node/project name into a valid Python identifier."""
-    s = re.sub(r"[^a-zA-Z0-9_]", "_", name.strip()).lower()
-    s = re.sub(r"_+", "_", s).strip("_") or "component"
-    if s[0].isdigit() or keyword.iskeyword(s):
-        s = f"mod_{s}"
-    return s
+    return layout.module_slug(name)
 
 
 def project_package_name(project: dict[str, Any]) -> str:
-    settings = project.get("settings") or {}
-    if settings.get("package_name"):
-        return slugify_module(str(settings["package_name"]))
-    return slugify_module(project.get("name") or "app")
+    return layout.project_package(project)
 
 
 def node_stub_rel_path(project: dict[str, Any], node: dict[str, Any]) -> str:
-    pkg = project_package_name(project)
-    mod = slugify_module(node["name"])
-    return f"src/{pkg}/{mod}.py"
+    return layout.python_source_rel(project, node)
 
 
 def entities_rel_path(project: dict[str, Any]) -> str:
-    pkg = project_package_name(project)
-    return f"src/{pkg}/entities.py"
+    return layout.python_entities_rel(project)
 
 
 def _render_entities_file(entities: list[dict[str, Any]]) -> str:
@@ -141,8 +132,8 @@ def generate_contract_stubs(
     entities = list(contract.get("entities") or [])
 
     files: list[StubFile] = [
-        StubFile(rel_path="src/__init__.py", content=""),
-        StubFile(rel_path=f"src/{pkg}/__init__.py", content=f'"""Package {pkg}."""\n'),
+        StubFile(rel_path=layout.python_src_init_rel(), content=""),
+        StubFile(rel_path=layout.python_package_init_rel(project), content=f'"""Package {pkg}."""\n'),
     ]
 
     entity_names: list[str] = []

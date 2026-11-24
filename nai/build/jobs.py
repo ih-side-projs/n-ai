@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .. import layout, manifest, paths
 from .context_pack import assemble_context_pack
 from .escalation import raise_change_request
 from .prompts import get_prompt
@@ -97,7 +98,7 @@ def _safe_rel_test_path(raw_path: str, node: dict[str, Any]) -> str:
     cleaned = raw_path.replace("\\", "/").lstrip("/")
     parts = [p for p in cleaned.split("/") if p and p != "."]
     if not parts or ".." in parts:
-        return f"tests/test_{slugify_module(node['name'])}.py"
+        return layout.python_test_rel(node)
     if parts[0] != "tests":
         parts = ["tests", *parts]
     if not parts[-1].endswith(".py"):
@@ -143,12 +144,31 @@ def _write_via_ws(ws: Any, ws_root: Path, rel_path: str, content: str) -> None:
         res = ws.call("write_file", {"path": rel_path, "content": content})
         if isinstance(res, str) and res.startswith("ERROR:"):
             raise RuntimeError(res)
-        target = ws_root / rel_path
+        target = paths.resolve_relative(ws_root, rel_path)
         if target.exists():
             return
-    target = ws_root / rel_path
+    target = paths.resolve_relative(ws_root, rel_path)
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(content, encoding="utf-8")
+
+
+def _guard_manifest(ctx: Any, ws_root: Path) -> Any | None:
+    """Fail a job instead of silently overwriting a hand-edited tracked file."""
+    force = bool((ctx.job.get("input_ref") or {}).get("force_manifest"))
+    mismatches = manifest.detect_hand_edits(ctx.store, ctx.project, force=force)
+    if mismatches and not force:
+        details = ", ".join(f"{m.relpath} ({m.reason})" for m in mismatches[:5])
+        return _make_job_result(False, error=f"hand edit detected: {details}")
+    return None
+
+
+def _record_touched(ctx: Any, ws_root: Path, node_id: str, stage: str) -> None:
+    touched = sorted(getattr(ctx.ws, "touched", set()) or set())
+    for rel in touched:
+        try:
+            manifest.record(ws_root, rel, node_id=node_id, stage=stage)
+        except (OSError, ValueError):
+            continue
 
 
 # ---------------------------------------------------------------------------
@@ -162,6 +182,9 @@ def handle_contract_stub(ctx: Any) -> Any:
     project = ctx.project
     node = _ensure_running(ctx.store, ctx.node)
     ws_root = _workspace_root(ctx)
+    guard = _guard_manifest(ctx, ws_root)
+    if guard is not None:
+        return guard
     parent_contract = _parent_contract(ctx.store, node)
 
     tenv = parse_target_env(project, ws_root)
@@ -176,6 +199,10 @@ def handle_contract_stub(ctx: Any) -> Any:
     with ctx.ws.job_context(_job_context(node["id"], "contract_stub", ctx.job.get("attempt", 1), policy)):
         for sf in stub_res.files:
             _write_via_ws(ctx.ws, ws_root, sf.rel_path, sf.content)
+            try:
+                manifest.record(ws_root, sf.rel_path, node_id=node["id"], stage="stub", content=sf.content)
+            except (OSError, ValueError):
+                pass
             ctx.artifact("code", sf.content, Path(sf.rel_path).name)
 
         def _run(cmd: str) -> tuple[int, str]:
@@ -223,6 +250,9 @@ def handle_author_tests(ctx: Any) -> Any:
     project = ctx.project
     node = _ensure_running(ctx.store, ctx.node)
     ws_root = _workspace_root(ctx)
+    guard = _guard_manifest(ctx, ws_root)
+    if guard is not None:
+        return guard
     parent_contract = _parent_contract(ctx.store, node)
 
     tenv = parse_target_env(project, ws_root)
@@ -241,7 +271,7 @@ def handle_author_tests(ctx: Any) -> Any:
     prompt = get_prompt("author_tests")
     pkg = project_package_name(project)
     mod = slugify_module(node["name"])
-    default_test_path = f"tests/test_{mod}.py"
+    default_test_path = layout.python_test_rel(node)
 
     # Never include implementation source; only spec, contract interfaces, and TENV-4/5
     user_payload = {
@@ -319,16 +349,20 @@ def handle_author_tests(ctx: Any) -> Any:
             ctx.check()
             _write_via_ws(ctx.ws, ws_root, test_rel, code)
             rc, out = _unpack_cmd_result(ctx.ws.run_command(env_cmd))
-            # Must fail against stubs, and must not fail due to syntax/collection error in the test file
-            bad_test_syntax = (
-                "SyntaxError" in out
-                or "IndentationError" in out
-                or "ERROR collecting" in out
-            )
+            # A real syntax error in the test itself is never an acceptable
+            # pre-implementation failure.
+            bad_test_syntax = "SyntaxError" in out or "IndentationError" in out
             # BLD-3: a valid failing test must fail *because the stub is not
             # implemented*. assert False / NameError are not acceptable.
             fails_on_stub = "NotImplementedError" in out
-            if rc != 0 and not bad_test_syntax and fails_on_stub:
+            # BLD-7: integration glue has no contract stub. Until the integrate
+            # job creates the wiring module, the frozen scenario test fails with
+            # ModuleNotFoundError for exactly that module; that is the expected
+            # pre-implementation state. Other import failures still go to repair.
+            missing_integration_module = (
+                is_integration and f"No module named '{pkg}.{mod}'" in out
+            )
+            if rc != 0 and not bad_test_syntax and (fails_on_stub or missing_integration_module):
                 break
 
             if stub_round == 3:
@@ -376,6 +410,10 @@ def handle_author_tests(ctx: Any) -> Any:
             last_run_at=_utc_now(),
         )
         ctx.artifact("test", code, Path(test_rel).name)
+        try:
+            manifest.record(ws_root, test_rel, node_id=node["id"], stage="test", content=code)
+        except (OSError, ValueError):
+            pass
         if hasattr(ctx.ws, "checkpoint_job"):
             ctx.ws.checkpoint_job()
 
@@ -426,6 +464,9 @@ def handle_implement(ctx: Any) -> Any:
     project = ctx.project
     node = _ensure_running(ctx.store, ctx.node)
     ws_root = _workspace_root(ctx)
+    guard = _guard_manifest(ctx, ws_root)
+    if guard is not None:
+        return guard
     parent_contract = _parent_contract(ctx.store, node)
 
     tenv = parse_target_env(project, ws_root)
@@ -466,7 +507,8 @@ def handle_implement(ctx: Any) -> Any:
     stub_rel = node_stub_rel_path(project, node)
     pkg = project_package_name(project)
     mod = slugify_module(node["name"])
-    writable = (stub_rel, f"src/{pkg}/{mod}/**")
+    package_dir = (layout.src_dir(".", "") / pkg / mod).as_posix()
+    writable = (stub_rel, f"{package_dir}/**")
     readonly = ("tests/**", ".nai/**", "conftest.py", "pytest.ini", "pyproject.toml", "setup.cfg", "tox.ini", entities_rel_path(project))
     policy = _path_policy(writable=writable, readonly=readonly)
 
@@ -506,6 +548,12 @@ def handle_implement(ctx: Any) -> Any:
         if hasattr(ctx.ws, "checkpoint_job"):
             ctx.ws.checkpoint_job()
 
+    _record_touched(ctx, ws_root, node["id"], "implement")
+    try:
+        if (ws_root / stub_rel).is_file():
+            manifest.record(ws_root, stub_rel, node_id=node["id"], stage="implement")
+    except (OSError, ValueError):
+        pass
     ctx.event("build.implemented", f"Implementation step finished for {node['name']}")
     # The runner counts attempts at job start; direct handler callers (tests and
     # legacy integrations without a runner) need the handler to record it.
@@ -541,6 +589,9 @@ def handle_verify(ctx: Any) -> Any:
     project = ctx.project
     node = ctx.node
     ws_root = _workspace_root(ctx)
+    guard = _guard_manifest(ctx, ws_root)
+    if guard is not None:
+        return guard
 
     if node["status"] == "ready":
         ctx.store.transition_node_status(node["id"], "running", note="Verify starting")
@@ -681,10 +732,20 @@ def handle_verify(ctx: Any) -> Any:
                 ctx.store.transition_node_status(parent["id"], "done", note="Project final acceptance passed (BLD-12)")
             if hasattr(ctx.store, "update_project_status"):
                 ctx.store.update_project_status(project["id"], "done")
+            if hasattr(ctx.ws, "checkpoint_job"):
+                try:
+                    ctx.ws.checkpoint_job(node["id"], "done", ctx.job.get("attempt", 1))
+                except TypeError:
+                    ctx.ws.checkpoint_job()
             ctx.event("project.done", f"Project {project['name']} passed final acceptance (BLD-12)")
             return _make_job_result(True, output=test_out, final_acceptance=True)
 
     ctx.store.transition_node_status(node["id"], "done", note="Verification passed (BLD-6)")
+    if hasattr(ctx.ws, "checkpoint_job"):
+        try:
+            ctx.ws.checkpoint_job(node["id"], "done", ctx.job.get("attempt", 1))
+        except TypeError:
+            ctx.ws.checkpoint_job()
     ctx.event("build.verified", f"Verification passed for {node['name']}")
     return _make_job_result(True, output=test_out)
 
@@ -700,6 +761,9 @@ def handle_integrate(ctx: Any) -> Any:
     project = ctx.project
     node = _ensure_running(ctx.store, ctx.node)
     ws_root = _workspace_root(ctx)
+    guard = _guard_manifest(ctx, ws_root)
+    if guard is not None:
+        return guard
     parent = ctx.store.get_node(node["parent_id"]) if node.get("parent_id") else None
     parent_contract = parent.get("contract") if parent else {}
 
@@ -707,9 +771,7 @@ def handle_integrate(ctx: Any) -> Any:
     TargetEnvManager().ensure_env(ws_root, tenv)
     tools_bundle = build_tools_bundle(ctx.store, project, node, ws_root)
 
-    pkg = project_package_name(project)
-    mod = slugify_module(node["name"])
-    wiring_rel = f"src/{pkg}/{mod}.py"
+    wiring_rel = layout.python_source_rel(project, node)
     policy = _path_policy(writable=(wiring_rel,), readonly=("tests/**", ".nai/**"))
 
     prompt = get_prompt("integrate")
@@ -743,6 +805,12 @@ def handle_integrate(ctx: Any) -> Any:
             pass
 
         summary = _run_coder(ctx, task, [wiring_rel], False, tools_bundle)
+        _record_touched(ctx, ws_root, node["id"], "integrate")
+        if (ws_root / wiring_rel).is_file():
+            try:
+                manifest.record(ws_root, wiring_rel, node_id=node["id"], stage="integrate")
+            except (OSError, ValueError):
+                pass
         if hasattr(ctx.ws, "checkpoint_job"):
             ctx.ws.checkpoint_job()
 

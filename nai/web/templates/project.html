@@ -94,7 +94,7 @@
   <aside class="panel">
     <h2>Runtime</h2>
     {% if project.current_job %}<p><span class="status status-running">running</span> {{ project.current_job.kind }}</p><p class="muted tiny">{{ project.current_job.id }}</p>{% else %}<p class="muted">No current job is recorded.</p>{% endif %}
-    <dl class="compact-dl"><div><dt>Jobs</dt><dd>{{ project.job_count }}</dd></div><div><dt>Last activity</dt><dd>{% if project.last_activity %}{{ project.last_activity.time }}{% else %}—{% endif %}</dd></div><div><dt>Workspace</dt><dd class="path-text">{{ project.workspace_path }}</dd></div></dl>
+    <dl class="compact-dl"><div><dt>Jobs</dt><dd>{{ project.job_count }}</dd></div><div><dt>Last activity</dt><dd>{% if project.last_activity %}{{ project.last_activity.time }}{% else %}—{% endif %}</dd></div><div><dt>Output dir</dt><dd class="path-text">{{ project.output_root or '—' }}</dd></div><div><dt>Project root</dt><dd class="path-text">{{ project.workspace_path }}</dd></div></dl>
     <div class="link-stack"><a href="/projects/{{ project.id }}/logs">Live log →</a><a href="/projects/{{ project.id }}/metrics">Metrics →</a><a href="/projects/{{ project.id }}/artifacts">Artifacts →</a><a href="/projects/{{ project.id }}/settings">Settings →</a></div>
     <h2>Controls</h2>
     <div class="button-group">

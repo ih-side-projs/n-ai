@@ -32,6 +32,25 @@ SQLite store migration, and the tool registry. Exits non-zero when a check
 fails. Run this first when subsystems pass their own tests but integration
 behaves unexpectedly.
 
+## `nai where` / `nai relocate` — project layout
+
+```
+nai where <project> [--db PATH] [--json]
+nai relocate <project> <output-root> [--db PATH] [--force]
+```
+
+`where` resolves a project by id, slug or name and prints its stable slug,
+`output_root`, project root and manifest status. `relocate` verifies every
+tracked file against `.nai-manifest.json`, then moves the project to
+`<output-root>/<slug>` and updates the store. Hand-edited files make
+relocation fail unless `--force` explicitly accepts their current hashes.
+
+New projects are created below an output root (precedence: `--output-dir`,
+`NAI_OUTPUT_ROOT`, project settings, then the default `outputs/` directory next
+to the store). The web form can only choose roots listed in
+`NAI_OUTPUT_ROOTS`. Project files live at `<output-root>/<slug>/`; `.nai/`
+holds only the database, logs, artifacts and snapshots.
+
 ## `nai service` — background service
 
 ```

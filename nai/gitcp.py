@@ -4,7 +4,7 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-GITIGNORE = ".agent/\nnode_modules/\n.venv/\nvenv/\n__pycache__/\n*.pyc\n.pytest_cache/\n.nai/artifacts/\n"
+GITIGNORE = ".agent/\nnode_modules/\n.venv/\nvenv/\n__pycache__/\n*.pyc\n.pytest_cache/\n.nai/\n.nai-project\n"
 
 
 class GitCheckpoint:

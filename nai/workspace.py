@@ -6,6 +6,7 @@ import os
 from contextlib import contextmanager
 from pathlib import Path
 
+from . import paths
 from .gate import IGNORE, VerificationGate
 from .gitcp import GitCheckpoint
 from .policy import JobContext, PathPolicy
@@ -74,10 +75,10 @@ class Workspace:
                 rel = "."
             elif rel.startswith("/work/"):
                 rel = rel[len("/work/"):].lstrip("/") or "."
-        p = (self.root / rel).resolve()
-        if p != self.root and self.root not in p.parents:
-            raise ValueError(f"path escapes workspace: {rel}")
-        return p
+        try:
+            return paths.resolve_within(self.root, self.root / rel)
+        except paths.LayoutError as exc:
+            raise ValueError(f"path escapes workspace: {rel}") from exc
 
     def _rel(self, p: Path) -> str:
         return p.relative_to(self.root).as_posix()

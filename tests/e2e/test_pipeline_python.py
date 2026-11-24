@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import stat
 from pathlib import Path
 
 from nai.build.plugin import register as register_build
@@ -26,6 +28,34 @@ Build a two-component Python library:
 - `word-counter` provides `count_words(text: str) -> int`.
 - Integration scenario S1: normalize text, then count its words.
 """
+
+NORMALIZER_SOURCE = (
+    "def normalize_text(text: str) -> str:\n"
+    "    return ' '.join(text.strip().split())\n"
+)
+WORD_COUNTER_SOURCE = (
+    "def count_words(text: str) -> int:\n"
+    "    return len(text.split())\n"
+)
+INTEGRATION_SOURCE = (
+    "from .text_normalizer import normalize_text\n"
+    "from .word_counter import count_words\n\n\n"
+    "def integrate(text: str) -> int:\n"
+    "    return count_words(normalize_text(text))\n"
+)
+
+NORMALIZER_TEST = (
+    "from tiny_lib.text_normalizer import normalize_text\n\n\n"
+    "def test_R1_normalize_text():\n    assert normalize_text(' a  b ') == 'a b'\n"
+)
+WORD_COUNTER_TEST = (
+    "from tiny_lib.word_counter import count_words\n\n\n"
+    "def test_R1_count_words():\n    assert count_words('a  b') == 2\n"
+)
+INTEGRATION_TEST = (
+    "from tiny_lib.root_integration import integrate\n\n\n"
+    "def test_S1_pipeline():\n    assert integrate(' a  b ') == 2\n"
+)
 
 
 def _config() -> Config:
@@ -103,25 +133,26 @@ def _tests_payload(path: str, code: str, req_id: str) -> str:
 
 def _source_script() -> list:
     return [
-        reply(calls=[call("write_file", path="src/tiny_lib/text_normalizer.py", content=(
-            "def normalize_text(text: str) -> str:\n"
-            "    return ' '.join(text.strip().split())\n"
-        ))]),
+        reply(calls=[call("write_file", path="src/tiny_lib/text_normalizer.py", content=NORMALIZER_SOURCE)]),
         reply("Implemented normalizer"),
-        reply(calls=[call("write_file", path="src/tiny_lib/word_counter.py", content=(
-            "def count_words(text: str) -> int:\n"
-            "    return len(text.split())\n"
-        ))]),
+        reply(calls=[call("write_file", path="src/tiny_lib/word_counter.py", content=WORD_COUNTER_SOURCE)]),
         reply("Implemented counter"),
-        reply(calls=[call("write_file", path="src/tiny_lib/root_integration.py", content=(
-            "from .text_normalizer import normalize_text\n"
-            "from .word_counter import count_words\n\n\n"
-            "def integrate(text: str) -> int:\n"
-            "    return count_words(normalize_text(text))\n"
-        ))]),
+        reply(calls=[call("write_file", path="src/tiny_lib/root_integration.py", content=INTEGRATION_SOURCE)]),
         reply("Implemented integration wiring"),
     ]
 
+
+
+def _all_nodes(store: Store, project_id: str) -> list[dict]:
+    """Breadth-first traversal of the project tree."""
+    nodes: list[dict] = []
+    frontier: list[str | None] = [None]
+    while frontier:
+        parent = frontier.pop(0)
+        kids = store.list_nodes(project_id, parent_id=parent)
+        nodes.extend(kids)
+        frontier.extend(k["id"] for k in kids)
+    return nodes
 
 
 def test_python_library_pipeline_imported_spec_to_done(tmp_path: Path):
@@ -130,27 +161,16 @@ def test_python_library_pipeline_imported_spec_to_done(tmp_path: Path):
         reply(_contract()),
         reply(_component_spec("text-normalizer", "Normalize whitespace in text", "R1")),
         reply(_component_spec("word-counter", "Count words in text", "R1")),
-        reply(_tests_payload(
-            "tests/test_text_normalizer.py",
-            "from tiny_lib.text_normalizer import normalize_text\n\n\n"
-            "def test_R1_normalize_text():\n    assert normalize_text(' a  b ') == 'a b'\n",
-            "R1",
-        )),
-        reply(_tests_payload(
-            "tests/test_word_counter.py",
-            "from tiny_lib.word_counter import count_words\n\n\n"
-            "def test_R1_count_words():\n    assert count_words('a  b') == 2\n",
-            "R1",
-        )),
-        reply(_tests_payload(
-            "tests/test_integration.py",
-            "from tiny_lib.root_integration import integrate\n\n\n"
-            "def test_S1_pipeline():\n    assert integrate(' a  b ') == 2\n",
-            "S1",
-        )),
+        reply(_tests_payload("tests/test_text_normalizer.py", NORMALIZER_TEST, "R1")),
+        reply(_tests_payload("tests/test_word_counter.py", WORD_COUNTER_TEST, "R1")),
+        reply(_tests_payload("tests/test_integration.py", INTEGRATION_TEST, "S1")),
+        # D6: handle_integrate opens one reasoner consult before running the coder.
+        reply("Integration wiring reviewed for scenario S1."),
     ]
 
-    with StubServer(consult=reasoner, coder=_source_script(), repeat_last=("consult", "coder")) as stub:
+    # No repeat_last: every scripted reply must be consumed, so a missing stage
+    # cannot silently reuse an earlier response.
+    with StubServer(consult=reasoner, coder=_source_script()) as stub:
         from nai.llm import LLM
 
         db = tmp_path / ".nai" / "nai.sqlite3"
@@ -171,13 +191,6 @@ def test_python_library_pipeline_imported_spec_to_done(tmp_path: Path):
             },
         )
         store.create_node(pid, "root", "system", spec_text=IMPORTED_SPEC, objective="Tiny library root")
-        integration_stub = tmp_path / "ws" / "src" / "tiny_lib" / "root_integration.py"
-        integration_stub.parent.mkdir(parents=True, exist_ok=True)
-        integration_stub.write_text(
-            "def integrate(text: str) -> int:\n"
-            "    raise NotImplementedError('integration stub')\n",
-            encoding="utf-8",
-        )
         store.close()
 
         llm = LLM(stub.url, "none", stream=False, show_thinking=False)
@@ -221,49 +234,88 @@ def test_python_library_pipeline_imported_spec_to_done(tmp_path: Path):
 
         with Store(db, read_only=True) as check:
             project = check.get_project(pid)
-            nodes = []
-            frontier = [None]
-            while frontier:
-                parent = frontier.pop(0)
-                kids = check.list_nodes(pid, parent_id=parent)
-                nodes.extend(kids)
-                frontier.extend(k["id"] for k in kids)
+            nodes = _all_nodes(check, pid)
             by_name = {n["name"]: n for n in nodes}
 
             assert project["status"] == "done", (
                 [(n["name"], n["status"]) for n in nodes],
                 [(j["kind"], str(j.get("error"))[:1500]) for j in check.list_jobs(pid, limit=100) if j.get("error")],
             )
-            assert by_name["root"]["status"] == "done"
-            assert by_name["text-normalizer"]["status"] == "done"
-            assert by_name["word-counter"]["status"] == "done"
-            assert any(n["kind"] == "integration" and n["status"] == "done" for n in nodes)
+
+            # Final node statuses: the whole tree, not just the named components.
+            assert {n["name"] for n in nodes} == {
+                "root", "text-normalizer", "word-counter", "root-integration",
+            }, [(n["name"], n["kind"], n["status"]) for n in nodes]
+            assert all(n["status"] == "done" for n in nodes), [
+                (n["name"], n["status"]) for n in nodes
+            ]
+            assert by_name["root"]["kind"] == "system"
+            assert by_name["text-normalizer"]["kind"] == "component"
+            assert by_name["word-counter"]["kind"] == "component"
+            integration = by_name["root-integration"]
+            assert integration["kind"] == "integration"
+            assert integration["parent_id"] == by_name["root"]["id"]
+            assert set(integration["depends_on"]) == {
+                by_name["text-normalizer"]["id"], by_name["word-counter"]["id"],
+            }
+            # BLD-10: every done node was built from the content it currently has.
+            for node in nodes:
+                assert node["built_hash"] == node["content_hash"], node["name"]
 
             jobs = check.list_jobs(pid, limit=10000)
-            succeeded_kinds = {j["kind"] for j in jobs if j["status"] == "succeeded"}
+            not_succeeded = [
+                (j["kind"], j["status"], str(j.get("error"))[:500])
+                for j in jobs
+                if j["status"] != "succeeded"
+            ]
+            assert not_succeeded == [], not_succeeded
+            succeeded_kinds = {j["kind"] for j in jobs}
             assert {"decompose", "interfaces", "component_spec", "contract_stub", "author_tests",
                     "implement", "verify", "integrate"} <= succeeded_kinds
 
             events = check.list_events(pid, limit=10000)
             assert [e for e in events if e["type"] == "planner.error"] == []
+            assert [e for e in events if e["type"] in {"job.failed", "node.failed", "build.verify_failed"}] == []
+            assert any(e["type"] == "project.done" for e in events)
 
             workspace = Path(project["workspace_path"])
-            for rel in (
-                "src/tiny_lib/__init__.py",
-                "src/tiny_lib/text_normalizer.py",
-                "src/tiny_lib/word_counter.py",
-                "src/tiny_lib/root_integration.py",
-                "tests/test_text_normalizer.py",
-                "tests/test_word_counter.py",
-                "tests/test_integration.py",
-            ):
-                assert (workspace / rel).is_file(), rel
+            expected_sources = {
+                "src/tiny_lib/text_normalizer.py": NORMALIZER_SOURCE,
+                "src/tiny_lib/word_counter.py": WORD_COUNTER_SOURCE,
+                "src/tiny_lib/root_integration.py": INTEGRATION_SOURCE,
+            }
+            for rel, expected in expected_sources.items():
+                assert (workspace / rel).read_text(encoding="utf-8") == expected, rel
+            assert (workspace / "src/tiny_lib/__init__.py").is_file()
+            assert (workspace / "src/tiny_lib/entities.py").is_file()
 
-            integration_id = next(n["id"] for n in nodes if n["kind"] == "integration")
-            for node_id in [by_name["text-normalizer"]["id"], by_name["word-counter"]["id"], integration_id]:
-                records = check.list_test_records(node_id)
-                assert records
-                for record in records:
-                    content = (workspace / record["file_path"]).read_bytes()
-                    assert hashlib.sha1(content).hexdigest() == record["frozen_hash"]
-                    assert record["last_result"] == "pass"
+            expected_tests = {
+                "tests/test_text_normalizer.py": (NORMALIZER_TEST, "R1"),
+                "tests/test_word_counter.py": (WORD_COUNTER_TEST, "R1"),
+                "tests/test_integration.py": (INTEGRATION_TEST, "S1"),
+            }
+            records_by_path = {
+                record["file_path"]: (node, record)
+                for node in nodes
+                for record in check.list_test_records(node["id"])
+            }
+            assert set(records_by_path) == set(expected_tests), sorted(records_by_path)
+            for rel, (authored, req_id) in expected_tests.items():
+                _node, record = records_by_path[rel]
+                expected_hash = hashlib.sha1(authored.encode("utf-8")).hexdigest()
+                assert record["frozen_hash"] == expected_hash, rel
+                assert record["last_result"] == "pass", rel
+                assert req_id in record["requirement_ids"], (rel, record["requirement_ids"])
+                # Frozen tests unchanged: on-disk bytes still match both the
+                # authored source and the hash recorded at authoring time.
+                on_disk = (workspace / rel).read_text(encoding="utf-8")
+                assert on_disk == authored, rel
+                assert hashlib.sha1(on_disk.encode("utf-8")).hexdigest() == record["frozen_hash"], rel
+                if os.name != "nt":
+                    mode = stat.S_IMODE((workspace / rel).stat().st_mode)
+                    assert mode & 0o222 == 0, (rel, oct(mode))
+
+            # Every scripted model reply was consumed: no stage was skipped and
+            # no unexpected call silently reused an earlier response.
+            assert stub.remaining("consult") == 0
+            assert stub.remaining("coder") == 0
