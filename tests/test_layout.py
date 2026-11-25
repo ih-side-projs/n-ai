@@ -239,7 +239,7 @@ def test_migration_backfills_slugs_and_layout(tmp_path: Path):
 
     store = Store(db)
     try:
-        assert store.schema_version == 7
+        assert store.schema_version == 8
         project = store.get_project(pid)
         assert project["slug"] == "legacy-project"
         assert project["settings"]["language"] == "python"

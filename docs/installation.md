@@ -89,6 +89,17 @@ separate one-shot container with network access. See
 fake `docker` executable, so no daemon is required for development; a single
 real-daemon round-trip test skips when `docker` is unavailable.
 
+## Optional: remote build workers
+
+Platform-specific (`macos`) components can build and test on another machine
+over the LAN; Linux keeps the store, the model calls and result parsing. On the
+orchestrator, `nai worker add macbook --capabilities macos,python` prints a token
+once and `nai remote serve --host 0.0.0.0 --insecure-lan` exposes the worker API
+on a trusted network (prefer `--certfile/--keyfile`). On the Mac, install the
+package, run `nai-worker init --name macbook --server URL --token TOKEN`, check
+with `nai-worker doctor`, then `nai-worker run` (or load
+`deploy/nai-worker.plist`). See [Remote workers](subsystems/remote-workers.md).
+
 ## Development install for docs
 
 Documentation is plain Markdown; to preview it with MkDocs:

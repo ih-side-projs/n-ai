@@ -37,6 +37,10 @@
                        ┌───────────────────────────┐
                        │ SS-EXEC (local / docker)  │
                        └───────────────────────────┘
+
+                       ┌───────────────────────────┐
+                       │ SS-REMOTE (worker API)    │
+                       └───────────────────────────┘
 ```
 
 ## Control principle
@@ -94,6 +98,12 @@ interactive shell for submitting new `nai` instances. See [Service](service.md).
   setup (network allowed) from run (network off), applies resource limits,
   streams capped output and makes cancellation real. See
   [Command execution](subsystems/execution.md).
+- **Remote is recipe-only**: a `macos` component's build/test steps run on a
+  worker through `nai/remote`, which sends a named recipe from `worker.toml`
+  (never a model-supplied command) with a scrubbed environment. Linux keeps the
+  store, the model calls and result parsing; waiting or losing a worker is an
+  infrastructure event, not a failed attempt. See
+  [Remote workers](subsystems/remote-workers.md).
 
 ## Store ownership
 

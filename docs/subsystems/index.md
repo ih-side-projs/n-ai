@@ -14,6 +14,7 @@ Each subsystem corresponds to a work package in the overall specification.
 | SS-EVAL | `nai/eval/` | [evaluation.md](evaluation.md) |
 | SS-LANGS | `nai/langs/` | [languages.md](languages.md) |
 | SS-EXEC | `nai/exec/` | [execution.md](execution.md) |
+| SS-REMOTE | `nai/remote/` | [remote-workers.md](remote-workers.md) |
 
 ## Dependency direction
 
@@ -30,7 +31,8 @@ library. `sched` depends on `core` and `store`. `spec` and `build` register job
 handlers as scheduler plugins. `tools` is used by jobs through allowlists. `web`
 and `eval` sit on top. `exec` is a leaf: it imports nothing from the other
 subsystems, and `build`, `eval`, `langs`, `sched`, `workspace` and the CLI route
-their commands through it.
+their commands through it. `remote` sits beside `exec`: it implements an
+`ExecutionTarget` and routes macos work to a worker.
 
 ## Shared rules
 

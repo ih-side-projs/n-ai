@@ -100,6 +100,7 @@ class Runner:
         self._seen_counter = itertools.count()
         self._usage_loaded: set[str] = set()
         self._transient: dict[str, int] = {}
+        self._infra: dict[str, int] = {}
         self._pool: ThreadPoolExecutor | None = None
         self._lock: RunnerLock | None = None
         self._dirty = True
@@ -588,6 +589,7 @@ class Runner:
         ctx, job, pid, nid = run.ctx, run.job, run.project_id, run.node_id
         seconds = self.clock.mono() - run.started
         status, error, result, requeue, budget_hit, trace = "succeeded", None, {}, False, False, None
+        infra_wait: bool | None = None
         if outcome[0] == "ok":
             res = outcome[1]
             if res is None:
@@ -616,6 +618,18 @@ class Runner:
                 else:
                     requeue = True
                     self._enter_backoff(pid, nid, job_id, exc)
+            elif type(exc).__name__ in {"WorkerUnavailable", "InfrastructureError"}:
+                # Waiting for a worker (or a worker dying mid-task) is not the
+                # node's fault: requeue without counting an attempt.  A job that
+                # keeps hitting infrastructure trouble eventually fails with an
+                # explicit ``infrastructure:`` error instead of looping forever.
+                n = self._infra[job_id] = self._infra.get(job_id, 0) + 1
+                if n > self.sched.remote_infra_retries:
+                    status, error = "failed", f"infrastructure: {exc}"
+                else:
+                    requeue = True
+                    error = str(exc)
+                    infra_wait = type(exc).__name__ == "WorkerUnavailable"
             else:
                 status, error = "failed", f"{type(exc).__name__}: {exc}"
         if nid:
@@ -629,6 +643,9 @@ class Runner:
             self.stats["jobs_requeued"] += 1
             self._event(pid, "job.requeued", f"{job['kind']} put back in the queue" + (f": {error}" if error else ""),
                         node_id=nid, job_id=job_id, level="warning")
+            if infra_wait is not None:
+                self._event(pid, "remote.waiting" if infra_wait else "remote.infrastructure", error or "",
+                            node_id=nid, job_id=job_id, level="warning")
         else:
             self.store.update_job(job_id, status=status, ended_at=now, tokens_in=ctx.tokens_in, tokens_out=ctx.tokens_out,
                                   result_ref=result or None, error=error)
@@ -639,6 +656,7 @@ class Runner:
                         data={"status": status, "seconds": seconds, "tokens_in": ctx.tokens_in, "tokens_out": ctx.tokens_out,
                               "calls": ctx.calls, "error": error, "trace": trace if status == "failed" and trace else None})
             self._transient.pop(job_id, None)
+            self._infra.pop(job_id, None)
         if budget_hit and ctx.node:
             self._event(pid, "budget.exceeded", error, node_id=nid, job_id=job_id, level="warning",
                         data={"usage": asdict(self.node_usage(ctx.node)), "budget": asdict(ctx.budget)})

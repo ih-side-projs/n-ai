@@ -47,7 +47,7 @@ def test_migration_0007_backfills_language(tmp_path: Path):
 
     store = Store(db)
     try:
-        assert store.schema_version == 7
+        assert store.schema_version == 8
         assert store.get_project(project_id)["settings"]["language"] == "python"
     finally:
         store.close()

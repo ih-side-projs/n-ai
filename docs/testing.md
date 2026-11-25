@@ -23,6 +23,7 @@ pytest -q
 | `tests/build/` | Context packs, stubs, tenv, traceability, escalation, failure ladder |
 | `tests/tools/` | Registry, sandbox, data-files and project-introspection tools |
 | `tests/exec/` | Execution targets: env scrubbing, phases, limits, streaming, cancellation (fake docker daemon) |
+| `tests/remote/` | Remote workers: store leases/claims, snapshots, recipes, API, `RemoteTarget`, routing, CLI, `/workers`, and one real `nai-worker` process |
 | `tests/web/` | Dashboard v1 and v2 (TestClient + httpx ASGITransport) |
 | `tests/e2e/` | Full CLI and web workflows against the real store, runner, command processor and stub LLM |
 | `tests/test_end_to_end.py` | In-process brief → spec → build → done pipeline |

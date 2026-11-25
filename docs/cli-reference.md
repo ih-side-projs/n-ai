@@ -11,6 +11,7 @@
 | `nai-bench` | `nai.eval.cli:bench_main` | benchmark runner |
 | `nai-service` | `nai.service.cli:service_main` | service supervisor control CLI |
 | `nai-doctor` | `nai.doctor:main` | offline integration self-check |
+| `nai-worker` | `nai.remote.worker:worker_main` | remote build/test worker (`init\|run\|doctor`) |
 
 Subcommands are registered through `nai.cli.register_subcommand()`; `python -m nai`
 uses the same dispatcher as the `nai` script. `python devswarm.py` is the original
@@ -82,6 +83,27 @@ named worker root. Worker roots can also come from
 `bin` are searched before `PATH`, so a worker checkout's own tools win. The
 command exits non-zero when a language is incomplete or a required tool is
 missing, which makes it usable as a pre-flight check.
+
+## `nai worker` / `nai remote` — remote build/test workers
+
+```
+nai worker add NAME [--capability CAP ...] [--capabilities a,b] [--toolchain NAME=VERSION ...] [--db PATH]
+nai worker list [--json] [--db PATH]
+nai worker revoke NAME_OR_ID [--db PATH]
+
+nai remote serve [--db PATH] [--host 127.0.0.1] [--port 8765] [--snapshots DIR]
+                 [--lease 60] [--certfile PEM --keyfile PEM] [--insecure-lan]
+nai remote status [--json] [--limit N] [--db PATH]
+```
+
+`worker add` prints the bearer token exactly once; only its sha256 digest is
+stored. `remote serve` is the worker API on its own listener: a non-loopback
+bind requires TLS unless `--insecure-lan` is passed explicitly. `remote status`
+summarises workers (online/offline/revoked) and recent tasks. On the worker
+machine, `nai-worker init` writes a `worker.toml` (mode 0600) mapping recipe ids
+to argv templates, `nai-worker doctor` checks the config, toolchain and server
+handshake, and `nai-worker run` claims and runs tasks. See
+[Remote workers](subsystems/remote-workers.md).
 
 ## `nai service` — background service
 

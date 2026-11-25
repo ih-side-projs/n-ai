@@ -38,6 +38,11 @@ try:
     from .langs_cli import languages_main as _languages_main
 
     register_subcommand("languages", _languages_main)
+    from .remote.cli import remote_cli as _remote_cli
+    from .remote.cli import worker_cli as _worker_cli
+
+    register_subcommand("worker", _worker_cli)
+    register_subcommand("remote", _remote_cli)
 except Exception as _exc:
     _SUBCOMMAND_IMPORT_ERRORS["service/mcp/bench/doctor"] = f"{type(_exc).__name__}: {_exc}"
 

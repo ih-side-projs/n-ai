@@ -55,6 +55,7 @@ and requirement IDs (CORE-1, STO-3, SCH-7, SPEC-3, ...).
 | **SS-EVAL** | Benchmark suites, scripted stub model server, `nai bench`, JSON/Markdown reports |
 | **SS-LANGS** | Language adapters: layout, stubs, commands, result parsing and path policy behind one protocol |
 | **SS-EXEC** | One execution seam for every command: scrubbed environment, setup/run network phases, resource limits, capped streaming output, real cancellation (local or Docker) |
+| **SS-REMOTE** | Pull-based remote workers: named recipes, hashed tokens, deterministic snapshots, leases, real cancellation; macos components build on a Mac over the LAN |
 | **Service** | Thin supervisor for web + runner + on-demand `nai` instances, with a CLI and local control socket |
 
 ## Architecture
@@ -68,7 +69,8 @@ Brief → SS-SPEC (approved tree of contracts)
       → SS-EVAL (measures safe unit sizes and regressions)
 
 SS-SCHED runs every model job; SS-CORE supplies the shared client and workspace;
-SS-EXEC runs every child process, local or in Docker.
+SS-EXEC runs every child process, local or in Docker; SS-REMOTE sends macos
+build/test recipes to a worker over the LAN.
 ```
 
 Control principle: Python decides *which* file, *which* job and *whether* tests

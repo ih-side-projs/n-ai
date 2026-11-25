@@ -146,6 +146,24 @@ can enforce; `close()` releases containers. New code that spawns a process must
 go through a target rather than `subprocess`. See
 [Command execution](subsystems/execution.md).
 
+## Remote workers (`nai.remote`)
+
+```python
+from nai.remote import RemoteTarget, target_for, snapshot_tree, validate_params
+
+target = RemoteTarget(
+    workspace_root, store,
+    project_id=project["id"], recipe="verify",
+    params={"targets": ["tests/test_a.py"]}, required_caps=["macos"],
+)
+result = target.run(["python", "-m", "pytest", "tests/test_a.py", "-q"], timeout=1800)
+```
+
+`RemoteTarget` snapshots the workspace, queues a named recipe and waits, checking
+for cancellation and an overall timeout. `target_for(...)` decides remote vs
+local from the node's platform; `route_for(...)` returns the decision and its
+reason. See [Remote workers](subsystems/remote-workers.md).
+
 ## Requirement IDs
 
 Requirement IDs (`CORE-2`, `STO-3`, `SCH-7`, `SPEC-3`, `BLD-1`, `TLS-1`,

@@ -18,6 +18,7 @@
       <a href="/escalations" {% if active_page == 'escalations' %}aria-current="page"{% endif %}>Escalations</a>
       <a href="/tools" {% if active_page == 'tools' %}aria-current="page"{% endif %}>Tools</a>
       <a href="/service" {% if active_page == 'service' %}aria-current="page"{% endif %}>Service</a>
+      <a href="/workers" {% if active_page == 'workers' %}aria-current="page"{% endif %}>Workers</a>
       <a href="/models" {% if active_page == 'models' %}aria-current="page"{% endif %}>Models</a>
       {% if project %}
         <a href="/projects/{{ project.id }}/metrics" {% if active_page == 'metrics' %}aria-current="page"{% endif %}>Metrics</a>

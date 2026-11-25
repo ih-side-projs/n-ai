@@ -15,6 +15,9 @@ from typing import Any
 from .. import manifest, paths
 from ..exec import PHASE_RUN, needs_shell, shell_argv
 from ..langs import knowledge, registry
+from ..remote import routing as remote_routing
+from ..remote.recipes import spec_for
+from ..remote.target import RemoteTarget
 from .context_pack import assemble_context_pack
 from .escalation import raise_change_request
 from .prompts import get_prompt
@@ -97,6 +100,136 @@ def _run_string(ctx: Any, command: str, **kwargs: Any) -> tuple[int, str]:
     """Run a command string; shell syntax becomes an explicit shell step."""
     argv = shell_argv(command) if needs_shell(command) else shlex.split(command)
     return _run_argv(ctx, argv, **kwargs)
+
+
+def _remote_block(project: Any) -> dict[str, Any]:
+    """``settings.remote`` when it is a table (enabled flag, waits, extra caps)."""
+    settings = (project or {}).get("settings") or {}
+    block = settings.get("remote") if isinstance(settings, dict) else None
+    return block if isinstance(block, dict) else {}
+
+
+def _cmd_timeout(ctx: Any) -> float:
+    """The project's command timeout, used for both local and remote runs."""
+    settings = (ctx.project or {}).get("settings") or {}
+    try:
+        return float(settings.get("cmd_timeout") or 600)
+    except (TypeError, ValueError):
+        return 600.0
+
+
+def _argv_targets(argv: Any, ws_root: Path) -> list[str]:
+    """Workspace-relative paths named in an argv (a recipe's ``targets``)."""
+    root = ws_root.resolve()
+    targets: list[str] = []
+    for part in list(argv)[1:]:
+        text = str(part)
+        if not text or text.startswith("-") or "=" in text:
+            continue
+        path = Path(text)
+        candidate = path if path.is_absolute() else (root / path)
+        try:
+            rel = candidate.resolve().relative_to(root).as_posix()
+        except (ValueError, OSError):
+            continue
+        if rel not in targets and (root / rel).exists():
+            targets.append(rel)
+    return targets
+
+
+def _remote_target(
+    ctx: Any,
+    node: dict[str, Any],
+    job_kind: str,
+    recipe: str,
+    *,
+    params: dict[str, Any] | None = None,
+    ws_root: Path | None = None,
+) -> RemoteTarget | None:
+    """A :class:`RemoteTarget` when this job's commands belong on a worker."""
+    project = ctx.project
+    block = _remote_block(project)
+    if not remote_routing.remote_enabled(project):
+        if remote_routing.node_platform(ctx.store, node) == remote_routing.MACOS:
+            ctx.event(
+                "remote.disabled",
+                f"{node['name']} builds for macos but settings.remote.enabled is false; running locally",
+                level="warning",
+            )
+        return None
+    remote, reason = remote_routing.route_for(project, node, job_kind, store=ctx.store)
+    if not remote:
+        return None
+    root = Path(ws_root or _workspace_root(ctx))
+    adapter = _adapter_for(project)
+    caps = set(spec_for(recipe).capabilities)
+    platform = remote_routing.resolved_platform(ctx.store, project, node)
+    if platform != "any":
+        caps.add(platform)
+    caps.update(str(c).strip().lower() for c in (block.get("capabilities") or []) if str(c).strip())
+    ctx.event(
+        "remote.routed",
+        f"{job_kind} runs on a worker ({reason})",
+        data={"recipe": recipe, "caps": sorted(caps)},
+    )
+    return RemoteTarget(
+        root,
+        ctx.store,
+        project_id=project["id"],
+        job_id=ctx.job.get("id"),
+        recipe=recipe,
+        params=params or {},
+        required_caps=sorted(caps),
+        snapshot_ignore=adapter.snapshot_ignore(),
+        snapshot_dir=root / ".nai" / "snapshots",
+        cache_dirs=adapter.cache_dirs(),
+        worker_wait_seconds=float(block.get("worker_wait_seconds", 60.0)),
+        poll_seconds=float(block.get("poll_seconds", 0.25)),
+        keep_snapshots=int(block.get("keep_snapshots", 5)),
+        default_timeout=_cmd_timeout(ctx),
+        on_note=lambda kind, message: ctx.event(kind, message),
+    )
+
+
+def _syntax_precheck(ws_root: Path, writable: tuple[str, ...], adapter: Any) -> str | None:
+    """Adapter syntax check for files a macos worker would reject on import.
+
+    ``implement`` stays on the orchestrator even for macos nodes (the coder is a
+    model job); this hook catches the cheap mistakes before a round trip.
+    """
+    for rel in writable:
+        if "*" in rel:
+            continue
+        path = ws_root / rel
+        if not path.is_file():
+            continue
+        try:
+            problem = adapter.check_syntax(path.read_text(encoding="utf-8", errors="replace"), rel)
+        except Exception as exc:  # noqa: BLE001 - a broken adapter must not crash the job
+            return f"{rel}: {type(exc).__name__}: {exc}"
+        if problem:
+            return f"{rel}: {problem}"
+    return None
+
+
+def _coder_command_policy(ctx: Any, node: dict[str, Any]) -> tuple[bool, bool]:
+    """``(allow_bash, macos_remote)`` for a coder run.
+
+    For macos components the coder cannot run commands: verification happens on
+    a worker, so implement relies on verify feedback plus a syntax pre-check.
+    """
+    settings = (ctx.project or {}).get("settings") or {}
+    macos_remote = remote_routing.remote_enabled(ctx.project) and (
+        remote_routing.node_platform(ctx.store, node) == remote_routing.MACOS
+    )
+    allow_bash = bool(settings.get("coder_allow_bash", False)) and not macos_remote
+    if macos_remote and settings.get("coder_allow_bash"):
+        ctx.event(
+            "remote.run_command_disabled",
+            f"run_command is disabled for {node['name']}: macos components are verified on a worker",
+            level="warning",
+        )
+    return allow_bash, macos_remote
 
 
 def _workspace_root(ctx: Any) -> Path:
@@ -372,7 +505,19 @@ def handle_author_tests(ctx: Any) -> Any:
         for stub_round in range(4):
             ctx.check()
             _write_via_ws(ctx.ws, ws_root, test_rel, code)
-            rc, out = _run_argv(ctx, test_argv, phase=PHASE_RUN, env_overrides=test_env)
+            remote_tests = _remote_target(
+                ctx, node, "author_tests", "verify",
+                params={"targets": _argv_targets(test_argv, ws_root)}, ws_root=ws_root,
+            )
+            if remote_tests is not None:
+                try:
+                    rc, out = _unpack_cmd_result(
+                        remote_tests.run(test_argv, timeout=_cmd_timeout(ctx), cancel_event=ctx.cancel_event)
+                    )
+                finally:
+                    remote_tests.close()
+            else:
+                rc, out = _run_argv(ctx, test_argv, phase=PHASE_RUN, env_overrides=test_env)
             # A real syntax error in the test itself is never an acceptable
             # pre-implementation failure.  BLD-3: a valid failing test must fail
             # *because the stub is not implemented*; assert False / NameError are
@@ -549,8 +694,7 @@ def handle_implement(ctx: Any) -> Any:
         if tr.get("file_path"):
             context_files.append(tr["file_path"])
 
-    settings = project.get("settings") or {}
-    allow_bash = bool(settings.get("coder_allow_bash", False))
+    allow_bash, macos_remote = _coder_command_policy(ctx, node)
 
     with ctx.ws.job_context(
         _job_context(node["id"], "implement", ctx.job.get("attempt", 1), policy)
@@ -564,6 +708,13 @@ def handle_implement(ctx: Any) -> Any:
             ctx.event("build.protected_tamper", msg, level="error")
             _fail_node(ctx.store, node["id"], msg)
             return _make_job_result(False, error=msg)
+
+        if macos_remote:
+            syntax_problem = _syntax_precheck(ws_root, writable, adapter)
+            if syntax_problem:
+                msg = f"Syntax pre-check failed: {syntax_problem}"
+                ctx.event("build.syntax_precheck_failed", msg, level="warning")
+                return _make_job_result(False, error=msg, output=syntax_problem)
 
         if hasattr(ctx.ws, "checkpoint_job"):
             ctx.ws.checkpoint_job()
@@ -682,11 +833,41 @@ def handle_verify(ctx: Any) -> Any:
     effective_cmd = shlex.join(test_argv)
     policy = _path_policy(writable=(), readonly=("src/**", "tests/**", ".nai/**"))
 
+    # Remote routing (Prompt 5): a macos node verifies on a worker.
+    remote_verify = _remote_target(
+        ctx, node, "verify", "verify",
+        params={"targets": _argv_targets(test_argv, ws_root)}, ws_root=ws_root,
+    )
+
+    def _lint_runner(argv: list[str]) -> tuple[int, str]:
+        if remote_verify is None:
+            return _run_argv(ctx, argv, phase=PHASE_RUN)
+        lint_target = _remote_target(
+            ctx, node, "verify", "lint",
+            params={"targets": _argv_targets(argv, ws_root)}, ws_root=ws_root,
+        )
+        if lint_target is None:  # pragma: no cover - routing is stable within a job
+            return _run_argv(ctx, argv, phase=PHASE_RUN)
+        try:
+            return _unpack_cmd_result(
+                lint_target.run(argv, timeout=_cmd_timeout(ctx), cancel_event=ctx.cancel_event)
+            )
+        finally:
+            lint_target.close()
+
     with ctx.ws.job_context(
         _job_context(node["id"], "verify", ctx.job.get("attempt", 1), policy, test_command=effective_cmd)
     ):
-        rc, test_out = _run_argv(ctx, test_argv, phase=PHASE_RUN, env_overrides=test_env)
-        gate_problem = ctx.ws.verification_problem() if hasattr(ctx.ws, "verification_problem") else None
+        if remote_verify is not None:
+            # A worker run *is* the verification; the local gate cannot match a
+            # command it never saw, so the exit code and output decide.
+            rc, test_out = _unpack_cmd_result(
+                remote_verify.run(test_argv, timeout=_cmd_timeout(ctx), cancel_event=ctx.cancel_event)
+            )
+            gate_problem = None
+        else:
+            rc, test_out = _run_argv(ctx, test_argv, phase=PHASE_RUN, env_overrides=test_env)
+            gate_problem = ctx.ws.verification_problem() if hasattr(ctx.ws, "verification_problem") else None
 
         # 4. Lint & type-check gate (TENV-3)
         lint_targets: list[str] = []
@@ -697,8 +878,10 @@ def handle_verify(ctx: Any) -> Any:
             ws_root,
             tenv,
             lint_targets,
-            run_argv=lambda argv: _run_argv(ctx, argv, phase=PHASE_RUN),
+            run_argv=_lint_runner,
         )
+    if remote_verify is not None:
+        remote_verify.close()
 
     combined_output = test_out
     if lint_res.raw_output:

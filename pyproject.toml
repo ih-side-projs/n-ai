@@ -39,6 +39,7 @@ nai-mcp = "nai.tools.cli:mcp_main"
 nai-bench = "nai.eval.cli:bench_main"
 nai-service = "nai.service.cli:service_main"
 nai-doctor = "nai.doctor:main"
+nai-worker = "nai.remote.worker:worker_main"
 
 [tool.setuptools.packages.find]
 include = ["nai*"]

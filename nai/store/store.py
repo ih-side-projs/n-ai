@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import hmac
 import json
 import re
 import shutil
@@ -16,7 +17,7 @@ import threading
 import uuid
 import zipfile
 from collections.abc import Iterator, Sequence
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -77,6 +78,58 @@ def utc_now() -> str:
 def new_id() -> str:
     """Short globally-unique identifier suitable for SQLite primary keys."""
     return uuid.uuid4().hex[:12]
+
+
+def _json_list(raw: Any) -> list[Any]:
+    """Parse a JSON array column, tolerating NULL and malformed values."""
+    if raw is None:
+        return []
+    if isinstance(raw, (list, tuple)):
+        return list(raw)
+    try:
+        value = json.loads(raw) if isinstance(raw, (str, bytes)) else raw
+    except ValueError:
+        return []
+    return list(value) if isinstance(value, (list, tuple)) else []
+
+
+def _json_dict(raw: Any) -> dict[str, Any]:
+    """Parse a JSON object column, tolerating NULL and malformed values."""
+    if raw is None:
+        return {}
+    if isinstance(raw, dict):
+        return dict(raw)
+    try:
+        value = json.loads(raw) if isinstance(raw, (str, bytes)) else raw
+    except ValueError:
+        return {}
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def _norm_cap(value: Any) -> str:
+    """Capabilities are compared case-insensitively and without padding."""
+    return str(value).strip().lower()
+
+
+def _parse_stamp(value: str | None) -> datetime:
+    if not value:
+        return datetime.now(timezone.utc)
+    parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def _format_stamp(value: datetime) -> str:
+    return value.astimezone(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
+
+
+def _iso_plus(seconds: float, now: str | None = None) -> str:
+    """``now + seconds`` in the store's timestamp format."""
+    return _format_stamp(_parse_stamp(now) + timedelta(seconds=float(seconds)))
+
+
+def _iso_minus(seconds: float, now: str | None = None) -> str:
+    """``now - seconds`` in the store's timestamp format."""
+    return _format_stamp(_parse_stamp(now) - timedelta(seconds=float(seconds)))
 
 
 def _json_object(value: Any, label: str) -> str:
@@ -274,9 +327,14 @@ class Store:
         backup_dir: str | Path | None = None,
         backup_keep: int = 7,
         migration_dir: str | Path | None = None,
+        allow_thread_sharing: bool = False,
     ) -> None:
         self.db_path = Path(db_path).expanduser().resolve()
         self.read_only = bool(read_only)
+        #: The worker API serves requests from a thread pool; it opens its own
+        #: connection with this flag and serializes calls behind a lock.  Every
+        #: other user keeps sqlite3's thread-affinity check on.
+        self.allows_thread_sharing = bool(allow_thread_sharing)
         self.backup_dir = Path(backup_dir).expanduser().resolve() if backup_dir else None
         self.backup_keep = int(backup_keep)
         self._backup_lock = threading.RLock()
@@ -292,9 +350,15 @@ class Store:
 
         if self.read_only:
             uri = self.db_path.as_uri() + "?mode=ro"
-            self.conn = sqlite3.connect(uri, uri=True, isolation_level=None, timeout=10)
+            self.conn = sqlite3.connect(
+                uri, uri=True, isolation_level=None, timeout=10,
+                check_same_thread=not self.allows_thread_sharing,
+            )
         else:
-            self.conn = sqlite3.connect(self.db_path, isolation_level=None, timeout=10)
+            self.conn = sqlite3.connect(
+                self.db_path, isolation_level=None, timeout=10,
+                check_same_thread=not self.allows_thread_sharing,
+            )
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA foreign_keys = ON")
         self.conn.execute("PRAGMA busy_timeout = 10000")
@@ -1921,6 +1985,370 @@ class Store:
                     shutil.rmtree(workspace, ignore_errors=True)
                 raise
             return new_project_id
+
+
+    # ------------------------------------------------------------------
+    # Remote workers and tasks (Prompt 5)
+    #
+    # The worker API is a second writer process, but it only touches these two
+    # tables and every claim runs inside ``BEGIN IMMEDIATE``, so exactly one
+    # worker can take a task.  Tokens are stored as sha256 hex digests and
+    # compared with ``hmac.compare_digest``; the plaintext never reaches disk.
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def hash_worker_token(token: str) -> str:
+        """Return the stored form of a worker bearer token."""
+        return hashlib.sha256(str(token).encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _worker_row(row: sqlite3.Row) -> dict[str, Any]:
+        item = dict(row)
+        item["capabilities"] = _json_list(item.pop("capabilities_json", "[]"))
+        item["toolchains"] = _json_dict(item.pop("toolchains_json", "{}"))
+        item["revoked"] = bool(item.get("revoked"))
+        return item
+
+    @staticmethod
+    def _remote_task_row(row: sqlite3.Row) -> dict[str, Any]:
+        item = dict(row)
+        item["params"] = _json_dict(item.pop("params_json", "{}"))
+        item["result"] = _json_dict(item.pop("result_json", "{}"))
+        item["required_caps"] = _json_list(item.pop("required_caps", "[]"))
+        return item
+
+    def add_worker(
+        self,
+        name: str,
+        token_hash: str,
+        *,
+        capabilities: Sequence[str] = (),
+        toolchains: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Register a worker; the caller keeps the plaintext token."""
+        name = str(name).strip()
+        if not name:
+            raise StoreError("worker name is required")
+        if not str(token_hash or "").strip():
+            raise StoreError("worker token hash is required")
+        worker_id = new_id()
+        caps = sorted({_norm_cap(c) for c in capabilities if str(c).strip()})
+        try:
+            with self._transaction() as conn:
+                conn.execute(
+                    "INSERT INTO workers(id,name,token_hash,capabilities_json,toolchains_json,last_seen,revoked,created_at)"
+                    " VALUES (?,?,?,?,?,NULL,0,?)",
+                    (worker_id, name, token_hash, canonical_json(caps), canonical_json(toolchains or {}), utc_now()),
+                )
+        except sqlite3.IntegrityError as exc:
+            raise StoreError(f"worker name already exists: {name}") from exc
+        return self.get_worker(worker_id) or {}
+
+    def list_workers(self) -> list[dict[str, Any]]:
+        """Every registered worker, revoked ones included."""
+        rows = self.conn.execute("SELECT * FROM workers ORDER BY name, id").fetchall()
+        return [self._worker_row(row) for row in rows]
+
+    def get_worker(self, identifier: str) -> dict[str, Any] | None:
+        """Look a worker up by id or name."""
+        row = self.conn.execute(
+            "SELECT * FROM workers WHERE id=? OR name=? ORDER BY id LIMIT 1",
+            (str(identifier), str(identifier)),
+        ).fetchone()
+        return self._worker_row(row) if row else None
+
+    def revoke_worker(self, identifier: str) -> bool:
+        """Mark a worker revoked so its token stops authenticating."""
+        worker = self.get_worker(identifier)
+        if worker is None:
+            return False
+        with self._transaction() as conn:
+            conn.execute("UPDATE workers SET revoked=1 WHERE id=?", (worker["id"],))
+        return True
+
+
+    def touch_worker(
+        self,
+        worker_id: str,
+        *,
+        capabilities: Sequence[str] | None = None,
+        toolchains: dict[str, Any] | None = None,
+        now: str | None = None,
+    ) -> None:
+        """Record a heartbeat: ``last_seen`` plus any capability refresh."""
+        sets = ["last_seen=?"]
+        params: list[Any] = [now or utc_now()]
+        if capabilities is not None:
+            sets.append("capabilities_json=?")
+            params.append(canonical_json(sorted({_norm_cap(c) for c in capabilities if str(c).strip()})))
+        if toolchains is not None:
+            sets.append("toolchains_json=?")
+            params.append(canonical_json(toolchains))
+        params.append(worker_id)
+        with self._transaction() as conn:
+            conn.execute(f"UPDATE workers SET {', '.join(sets)} WHERE id=?", params)
+
+    def worker_for_token(self, token: str) -> dict[str, Any] | None:
+        """Resolve a bearer token in constant time; revoked workers never match."""
+        if not token:
+            return None
+        digest = self.hash_worker_token(token)
+        match: dict[str, Any] | None = None
+        for row in self.conn.execute("SELECT * FROM workers WHERE revoked=0").fetchall():
+            # Compare every row so timing does not reveal a near match.
+            if hmac.compare_digest(str(row["token_hash"]), digest):
+                match = self._worker_row(row)
+        return match
+
+    def online_workers(self, *, lease_seconds: float = 60, now: str | None = None) -> list[dict[str, Any]]:
+        """Workers whose last heartbeat is inside the lease window."""
+        cutoff = _iso_minus(lease_seconds, now)
+        rows = self.conn.execute(
+            "SELECT * FROM workers WHERE revoked=0 AND last_seen IS NOT NULL AND last_seen>=? ORDER BY name, id",
+            (cutoff,),
+        ).fetchall()
+        return [self._worker_row(row) for row in rows]
+
+    def workers_with_caps(
+        self, required_caps: Sequence[str], *, lease_seconds: float = 60, now: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Online workers that declare every required capability."""
+        needed = {_norm_cap(c) for c in required_caps}
+        return [
+            w for w in self.online_workers(lease_seconds=lease_seconds, now=now)
+            if needed <= set(w["capabilities"])
+        ]
+
+
+    def create_remote_task(
+        self,
+        project_id: str,
+        recipe: str,
+        snapshot_sha: str,
+        *,
+        job_id: str | None = None,
+        params: dict[str, Any] | None = None,
+        required_caps: Sequence[str] = (),
+        now: str | None = None,
+    ) -> dict[str, Any]:
+        """Queue one named recipe for a worker with the required capabilities."""
+        task_id = new_id()
+        stamp = now or utc_now()
+        caps = sorted({_norm_cap(c) for c in required_caps if str(c).strip()})
+        with self._transaction() as conn:
+            conn.execute(
+                "INSERT INTO remote_tasks(id,project_id,job_id,recipe,params_json,snapshot_sha,required_caps,status,"
+                "lease_expires_at,worker_id,redeliveries,result_json,error,created_at,updated_at)"
+                " VALUES (?,?,?,?,?,?,?,'queued',NULL,NULL,0,'{}','',?,?)",
+                (task_id, project_id, job_id, str(recipe), canonical_json(params or {}), str(snapshot_sha),
+                 canonical_json(caps), stamp, stamp),
+            )
+        return self.get_remote_task(task_id) or {}
+
+    def get_remote_task(self, task_id: str) -> dict[str, Any] | None:
+        """Fetch one task by id."""
+        row = self.conn.execute("SELECT * FROM remote_tasks WHERE id=?", (str(task_id),)).fetchone()
+        return self._remote_task_row(row) if row else None
+
+    def list_remote_tasks(
+        self,
+        *,
+        project_id: str | None = None,
+        worker_id: str | None = None,
+        status: str | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """Most recent tasks first, optionally filtered."""
+        where: list[str] = []
+        params: list[Any] = []
+        if project_id:
+            where.append("t.project_id=?")
+            params.append(project_id)
+        if worker_id:
+            where.append("t.worker_id=?")
+            params.append(worker_id)
+        if status:
+            where.append("t.status=?")
+            params.append(status)
+        clause = f" WHERE {' AND '.join(where)}" if where else ""
+        params.append(max(1, int(limit)))
+        rows = self.conn.execute(
+            "SELECT t.*, w.name AS worker_name FROM remote_tasks t LEFT JOIN workers w ON w.id=t.worker_id"
+            f"{clause} ORDER BY t.created_at DESC, t.id DESC LIMIT ?",
+            params,
+        ).fetchall()
+        return [self._remote_task_row(row) for row in rows]
+
+    def cancel_remote_task(self, task_id: str, *, reason: str = "", now: str | None = None) -> bool:
+        """Ask a worker to stop; the heartbeat response carries the cancel flag."""
+        stamp = now or utc_now()
+        with self._transaction() as conn:
+            row = conn.execute("SELECT status FROM remote_tasks WHERE id=?", (str(task_id),)).fetchone()
+            if row is None or row["status"] in {"done", "failed", "cancelled"}:
+                return False
+            conn.execute(
+                "UPDATE remote_tasks SET status='cancelled', error=?, updated_at=? WHERE id=?",
+                (str(reason or "cancelled"), stamp, str(task_id)),
+            )
+        return True
+
+
+    def claim_remote_task(
+        self,
+        worker_id: str,
+        capabilities: Sequence[str],
+        *,
+        lease_seconds: float = 60,
+        max_redeliveries: int = 3,
+        now: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Atomically lease the oldest queued task this worker can run.
+
+        Expiring leases and the claim happen in one ``BEGIN IMMEDIATE``
+        transaction, so two workers polling at the same time can never receive
+        the same task.
+        """
+        stamp = now or utc_now()
+        caps = {_norm_cap(c) for c in capabilities}
+        with self._transaction() as conn:
+            self._expire_remote_tasks(conn, max_redeliveries=max_redeliveries, now=stamp)
+            rows = conn.execute(
+                "SELECT * FROM remote_tasks WHERE status='queued' ORDER BY created_at, id"
+            ).fetchall()
+            chosen = None
+            for row in rows:
+                if {_norm_cap(c) for c in _json_list(row["required_caps"])} <= caps:
+                    chosen = row
+                    break
+            if chosen is None:
+                return None
+            lease = _iso_plus(lease_seconds, stamp)
+            conn.execute(
+                "UPDATE remote_tasks SET status='claimed', worker_id=?, lease_expires_at=?, updated_at=? WHERE id=?",
+                (worker_id, lease, stamp, chosen["id"]),
+            )
+            claimed = conn.execute("SELECT * FROM remote_tasks WHERE id=?", (chosen["id"],)).fetchone()
+            return self._remote_task_row(claimed)
+
+    def heartbeat_remote_task(
+        self,
+        task_id: str,
+        worker_id: str,
+        *,
+        lease_seconds: float = 60,
+        max_redeliveries: int = 3,
+        now: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Extend a lease and tell the worker whether to stop.
+
+        Returns ``None`` when the task is unknown or leased to another worker.
+        """
+        stamp = now or utc_now()
+        with self._transaction() as conn:
+            self._expire_remote_tasks(conn, max_redeliveries=max_redeliveries, now=stamp)
+            row = conn.execute("SELECT * FROM remote_tasks WHERE id=?", (str(task_id),)).fetchone()
+            if row is None or row["worker_id"] != worker_id:
+                return None
+            if row["status"] == "claimed":
+                conn.execute(
+                    "UPDATE remote_tasks SET lease_expires_at=?, updated_at=? WHERE id=?",
+                    (_iso_plus(lease_seconds, stamp), stamp, row["id"]),
+                )
+                row = conn.execute("SELECT * FROM remote_tasks WHERE id=?", (row["id"],)).fetchone()
+            task = self._remote_task_row(row)
+            return {
+                "task_id": task["id"],
+                "status": task["status"],
+                "cancel": task["status"] == "cancelled",
+                "lease_expires_at": task.get("lease_expires_at"),
+            }
+
+
+    def finish_remote_task(
+        self,
+        task_id: str,
+        worker_id: str,
+        result: dict[str, Any],
+        *,
+        now: str | None = None,
+    ) -> bool:
+        """Record a worker's result. A cancelled task ignores late results."""
+        stamp = now or utc_now()
+        with self._transaction() as conn:
+            row = conn.execute("SELECT * FROM remote_tasks WHERE id=?", (str(task_id),)).fetchone()
+            if row is None or row["worker_id"] != worker_id or row["status"] != "claimed":
+                return False
+            conn.execute(
+                "UPDATE remote_tasks SET status='done', result_json=?, error='', lease_expires_at=NULL, updated_at=?"
+                " WHERE id=?",
+                (canonical_json(result or {}), stamp, row["id"]),
+            )
+        return True
+
+    def fail_remote_task(
+        self,
+        task_id: str,
+        worker_id: str,
+        error: str,
+        *,
+        now: str | None = None,
+    ) -> bool:
+        """Mark a claimed task failed (the worker could not even run it)."""
+        stamp = now or utc_now()
+        message = str(error or "infrastructure: task failed")
+        if not message.startswith("infrastructure:"):
+            message = f"infrastructure: {message}"
+        with self._transaction() as conn:
+            row = conn.execute("SELECT * FROM remote_tasks WHERE id=?", (str(task_id),)).fetchone()
+            if row is None or row["worker_id"] != worker_id or row["status"] != "claimed":
+                return False
+            conn.execute(
+                "UPDATE remote_tasks SET status='failed', error=?, result_json=?, lease_expires_at=NULL, updated_at=?"
+                " WHERE id=?",
+                (message, canonical_json({"infrastructure": True, "error": message}), stamp, row["id"]),
+            )
+        return True
+
+    def expire_remote_tasks(
+        self,
+        *,
+        max_redeliveries: int = 3,
+        now: str | None = None,
+    ) -> list[str]:
+        """Requeue expired leases; the third expiry fails the task as infrastructure."""
+        stamp = now or utc_now()
+        with self._transaction() as conn:
+            return self._expire_remote_tasks(conn, max_redeliveries=max_redeliveries, now=stamp)
+
+    def _expire_remote_tasks(
+        self, conn: sqlite3.Connection, *, max_redeliveries: int, now: str
+    ) -> list[str]:
+        """Requeue (or fail) every lease that has run out. Caller holds a transaction."""
+        rows = conn.execute(
+            "SELECT * FROM remote_tasks WHERE status='claimed' AND lease_expires_at IS NOT NULL AND lease_expires_at<=?",
+            (now,),
+        ).fetchall()
+        expired: list[str] = []
+        for row in rows:
+            expired.append(row["id"])
+            redeliveries = int(row["redeliveries"]) + 1
+            if redeliveries >= int(max_redeliveries):
+                message = (
+                    f"infrastructure: worker {row['worker_id'] or 'unknown'} lost the lease "
+                    f"{redeliveries} times"
+                )
+                conn.execute(
+                    "UPDATE remote_tasks SET status='failed', redeliveries=?, worker_id=NULL, lease_expires_at=NULL,"
+                    " result_json=?, error=?, updated_at=? WHERE id=?",
+                    (redeliveries, canonical_json({"infrastructure": True, "error": message}), message, now, row["id"]),
+                )
+            else:
+                conn.execute(
+                    "UPDATE remote_tasks SET status='queued', redeliveries=?, worker_id=NULL, lease_expires_at=NULL,"
+                    " updated_at=? WHERE id=?",
+                    (redeliveries, now, row["id"]),
+                )
+        return expired
 
 
 class _BundleReader:

@@ -12,6 +12,7 @@ import time
 from collections import Counter
 from collections.abc import Generator
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from html import escape
 from pathlib import Path
 from typing import Any
@@ -957,6 +958,53 @@ def create_app(
             return {"running": True, **_service_call("status")}
         except Exception as exc:  # noqa: BLE001
             return {"running": False, "error": str(exc)}
+
+    def _worker_rows(store: Store) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        """Read-only worker/task view; a pre-migration database simply has none."""
+        try:
+            worker_rows = [dict(row) for row in store.conn.execute(
+                "SELECT id, name, capabilities_json, toolchains_json, last_seen, revoked"
+                " FROM workers ORDER BY name, id"
+            ).fetchall()]
+            task_rows = [dict(row) for row in store.conn.execute(
+                "SELECT t.id, t.recipe, t.status, t.redeliveries, t.snapshot_sha, t.updated_at,"
+                " w.name AS worker_name FROM remote_tasks t LEFT JOIN workers w ON w.id=t.worker_id"
+                " ORDER BY t.created_at DESC, t.id DESC LIMIT 25"
+            ).fetchall()]
+        except sqlite3.OperationalError:
+            return [], []
+        cutoff = (datetime.now(timezone.utc) - timedelta(seconds=60)).isoformat(
+            timespec="microseconds"
+        ).replace("+00:00", "Z")
+        workers: list[dict[str, Any]] = []
+        for row in worker_rows:
+            try:
+                caps = json.loads(row.pop("capabilities_json") or "[]")
+            except ValueError:
+                caps = []
+            try:
+                tools = json.loads(row.pop("toolchains_json") or "{}")
+            except ValueError:
+                tools = {}
+            workers.append({
+                **row,
+                "capabilities": caps if isinstance(caps, list) else [],
+                "toolchains": tools if isinstance(tools, dict) else {},
+                "revoked": bool(row.get("revoked")),
+                "online": not row.get("revoked") and str(row.get("last_seen") or "") >= cutoff,
+            })
+        return workers, task_rows
+
+    @app.get("/workers", response_class=HTMLResponse)
+    def workers_page(request: Request, store: Store = Depends(get_store)):
+        workers, tasks = _worker_rows(store)
+        return render(request, "workers.html",
+                      {"workers": workers, "tasks": tasks, "active_page": "workers"})
+
+    @app.get("/api/workers")
+    def api_workers(store: Store = Depends(get_store)):
+        workers, tasks = _worker_rows(store)
+        return {"workers": workers, "tasks": tasks}
 
     @app.get("/tools", response_class=HTMLResponse)
     def tools_page(request: Request, store: Store = Depends(get_store)):

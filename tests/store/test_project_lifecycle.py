@@ -44,7 +44,7 @@ def test_migration_to_0004_preserves_child_rows(tmp_path: Path):
 
     store = Store(db)
     try:
-        assert store.schema_version == 7
+        assert store.schema_version == 8
         assert store.get_project(pid)["status"] == "active"
         assert store.get_node(nid) is not None
         assert store.get_job(jid) is not None

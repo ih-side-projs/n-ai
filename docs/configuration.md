@@ -101,6 +101,28 @@ values raise `StoreError`/`UnknownLanguageError` instead of falling back
 silently. `settings.target_env.language` is the human stack string (`Python
 3.12`) used by prompts and the environment block.
 
+### Remote workers
+
+`settings.remote` opts a project into [remote execution](subsystems/remote-workers.md):
+
+```json
+{
+  "remote": {
+    "enabled": true,
+    "worker_wait_seconds": 60,
+    "capabilities": ["macos"],
+    "poll_seconds": 0.25,
+    "keep_snapshots": 5
+  }
+}
+```
+
+`enabled` defaults to `false`: a macos component then builds locally and the
+runner records a `remote.disabled` warning once per job. `capabilities` adds
+requirements on top of the recipe's own (for example a specific toolchain), and
+`worker_wait_seconds` bounds how long a job waits for a capable worker before it
+is requeued without counting an attempt.
+
 ## Structured-output method (D9)
 
 `nai.spec.structured.call_structured_json()` tries, in order:

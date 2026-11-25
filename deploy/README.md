@@ -45,6 +45,31 @@ Create `~/Library/LaunchAgents/local.nai.plist` (replace paths):
 
 Then `launchctl load ~/Library/LaunchAgents/local.nai.plist`.
 
+## Remote worker (macOS)
+
+A worker runs named recipes for a Linux orchestrator over the LAN. On the
+orchestrator:
+
+```bash
+nai worker add macbook --capabilities macos,python   # prints the token once
+nai remote serve --host 0.0.0.0 --port 8765 --insecure-lan   # trusted LAN only
+```
+
+On the Mac:
+
+```bash
+nai-worker init --name macbook --server http://<orchestrator>:8765 --token <token>
+nai-worker doctor
+nai-worker run            # or install the launchd agent below
+```
+
+`nai-worker.plist` is a launchd user agent; copy it to
+`~/Library/LaunchAgents/local.nai.worker.plist`, edit the paths, and
+`launchctl load -w` it. `worker.toml` holds the token, so keep it at mode 0600
+(`nai-worker init` does that). Prefer TLS (`--certfile/--keyfile`) whenever the
+listener is reachable beyond a trusted LAN; `--insecure-lan` is an explicit
+opt-in, never a default.
+
 ## Manual (foreground)
 
 ```bash

@@ -52,6 +52,7 @@ nav:
       - Evaluation: subsystems/evaluation.md
       - Languages: subsystems/languages.md
       - Execution: subsystems/execution.md
+      - Remote workers: subsystems/remote-workers.md
   - Reference:
       - Overall specification: specification.md
       - Troubleshooting: troubleshooting.md

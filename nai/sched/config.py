@@ -19,6 +19,7 @@ class SchedConfig:
     budgets: dict = field(default_factory=lambda: {"max_attempts": 8, "max_wall_seconds": 7200.0, "max_tokens": 2_000_000})
     attempt_job_kinds: list[str] = field(default_factory=lambda: ["implement"])   # starting one of these counts an attempt
     transient_retries: int = 5                 # server-unreachable requeues before a job is failed
+    remote_infra_retries: int = 10             # waiting/infrastructure requeues before a job is failed
     backoff_start_seconds: float = 2.0
     backoff_max_seconds: float = 60.0
     require_parent_contract_approval: bool = True   # SCH-4

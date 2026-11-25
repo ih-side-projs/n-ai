@@ -21,9 +21,10 @@ from types import SimpleNamespace
 MODULES = (
     "nai.cli", "nai.consult", "nai.structured", "nai.store", "nai.sched.runner",
     "nai.spec.plugin", "nai.build.plugin", "nai.tools.registry", "nai.web.app",
-    "nai.eval.harness", "nai.service.daemon",
+    "nai.eval.harness", "nai.service.daemon", "nai.remote.server", "nai.remote.worker",
 )
-EXPECTED_SUBCOMMANDS = ("run", "mcp", "bench", "service", "doctor", "project", "languages", "where", "relocate")
+EXPECTED_SUBCOMMANDS = ("run", "mcp", "bench", "service", "doctor", "project", "languages", "where", "relocate",
+                        "worker", "remote")
 PACKAGE_GLOBS = (
     "prompts/*.txt", "web/templates/*.html", "web/static/*.css", "web/static/*.js",
     "spec/prompts/*.txt", "spec/schemas/*.json", "build/prompts/*.txt", "store/migrations/*.sql",
@@ -33,7 +34,7 @@ REQUIRED_TEMPLATES = (
     "base.html", "projects.html", "project.html", "node.html", "node_edit.html",
     "approvals.html", "escalations.html", "tools.html", "logs.html", "metrics.html",
     "models.html", "artifacts.html", "file_view.html", "auth.html", "service.html",
-    "settings.html", "_tree.html",
+    "settings.html", "_tree.html", "workers.html",
 )
 
 
