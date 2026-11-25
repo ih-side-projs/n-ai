@@ -1,135 +1,149 @@
-"""command-runner: run one shell command in the workspace, locally or in a Docker container (v1 + CORE-6)."""
+"""command-runner: the workspace's handle on the execution target.
+
+Every command N-AI runs goes through :class:`nai.exec.ExecutionTarget`.  This
+module is the thin, backward-compatible adapter the workspace and the build
+pipeline use: it keeps the historical ``run_command`` string API for the
+model-facing ``run_command`` tool, and adds ``run_argv`` for pipeline steps
+that know their argv.
+
+Hardening lives in the target, not here: environment scrubbing, the setup/run
+network split, resource limits, streaming output and cancellation.
+"""
+
 from __future__ import annotations
 
-import atexit
-import itertools
-import os
-import signal
-import subprocess
-import threading
+import shlex
 from pathlib import Path
+from typing import Any
 
+from .exec import PHASE_RUN, ExecutionTarget, RunResult, make_target, shell_argv
 from .gate import VerificationGate
-from .terminal import log
 from .textutil import truncate
 
-EXTRA_ENV = {"CI": "1", "PYTHONUNBUFFERED": "1", "DEBIAN_FRONTEND": "noninteractive",
-             "GIT_TERMINAL_PROMPT": "0", "PIP_DISABLE_PIP_VERSION_CHECK": "1",
-             "PYTHONDONTWRITEBYTECODE": "1"}  # no stale .pyc after same-size edits
-_SEQ = itertools.count(1)
-
-# Secrets must never be handed to generated code or shell commands (G2).
-_SECRET_ENV_PREFIXES = ("LLAMA_SWAP_KEY", "NAI_WEB_TOKEN", "OPENAI_API_KEY", "AWS_", "GITHUB_TOKEN")
-
-
-def _safe_env(extra: dict[str, str] | None = None) -> dict[str, str]:
-    env = {k: v for k, v in os.environ.items() if not any(k.upper().startswith(p) for p in _SECRET_ENV_PREFIXES)}
-    env.update(EXTRA_ENV)
-    env.update(extra or {})
-    return env
+#: Appended when a command counted as a passing verification run.
+VERIFICATION_NOTE = "verification"
 
 
 class CommandRunner:
-    def __init__(self, root: Path, default_timeout: int, docker_image: str | None, gate: VerificationGate,
-                 extra_env: dict[str, str] | None = None):
-        self.root = Path(root)
-        self.default_timeout = default_timeout
-        self.gate = gate
-        self.extra_env = dict(extra_env or {})   # e.g. venv PATH, PYTHONWARNINGS (TENV-2)
-        self.container: str | None = None
-        self._proc: subprocess.Popen | None = None
-        self._cancelled = False
-        self._lock = threading.Lock()
-        if docker_image:
-            self._start_container(docker_image)
+    """Run commands through one :class:`ExecutionTarget`."""
 
-    # -- docker ---------------------------------------------------------------
-    def _start_container(self, image: str) -> None:
-        # one name per runner (not only per process) so several workspaces can coexist
-        self.container = f"nai-{os.getpid()}-{next(_SEQ)}"
-        subprocess.run(
-            ["docker", "run", "-d", "--rm", "--init", "--name", self.container,
-             "--network", "none", "--memory", "2g", "--cpus", "2", "--user", "1000:1000",
-             "-v", f"{self.root}:/work", "-w", "/work", image, "sleep", "infinity"],
-            check=True, stdout=subprocess.DEVNULL)
-        atexit.register(self.close)
-        log("sys", f"commands run inside docker container {self.container} ({image})", "cyan")
+    def __init__(
+        self,
+        root: str | Path,
+        default_timeout: float = 600,
+        docker_image: str | None = None,
+        gate: VerificationGate | None = None,
+        extra_env: dict[str, str] | None = None,
+        target: ExecutionTarget | None = None,
+        on_note: Any = None,
+    ):
+        self.root = Path(root).resolve()
+        self.default_timeout = default_timeout
+        self.gate = gate if gate is not None else VerificationGate(self.root)
+        # e.g. a target venv's bin dir on PATH; merged into every command's env
+        self.extra_env = dict(extra_env or {})
+        self.target: ExecutionTarget = target or make_target(
+            self.root,
+            docker_image=docker_image,
+            default_timeout=default_timeout,
+            on_note=on_note,
+        )
+
+    # -- introspection -------------------------------------------------------
+    @property
+    def container(self) -> str | None:
+        """The Docker container name when the target runs in Docker mode."""
+        return getattr(self.target, "container", None)
+
+    def describe(self) -> str:
+        return self.target.describe()
+
+    def capabilities(self):
+        return self.target.capabilities()
+
+    # -- cancellation --------------------------------------------------------
+    def cancel(self) -> bool:
+        """Stop the running command.  Returns True when something was running."""
+        cancel = getattr(self.target, "cancel", None)
+        return bool(cancel()) if callable(cancel) else False
 
     def close(self) -> None:
-        """Remove the container (idempotent)."""
-        if self.container:
-            name, self.container = self.container, None
-            subprocess.run(["docker", "rm", "-f", name], capture_output=True)
+        self.target.close()
 
-    # -- cancel (for SCH-6) -----------------------------------------------------
-    def cancel(self) -> bool:
-        """Kill the running command (process group locally, docker exec container-side)."""
-        with self._lock:
-            p = self._proc
-            if p is None:
-                return False
-            self._cancelled = True
-            if self.container:
-                try:
-                    subprocess.run(["docker", "exec", self.container, "pkill", "-9", "-f", "bash -o pipefail"],
-                                   capture_output=True, timeout=5)
-                    p.kill()
-                    return True
-                except Exception:
-                    return False
-            try:
-                os.killpg(os.getpgid(p.pid), signal.SIGKILL)
-            except Exception:
-                return False
-            return True
+    # -- running -------------------------------------------------------------
+    def run_argv(
+        self,
+        argv: Any,
+        timeout_seconds: float | None = None,
+        scope: str | None = None,
+        *,
+        phase: str = PHASE_RUN,
+        env_overrides: dict[str, str] | None = None,
+        network: bool | None = None,
+        cwd: str | Path | None = None,
+        output_cap: int | None = None,
+        cancel_event: Any = None,
+        command_text: str | None = None,
+    ) -> RunResult:
+        """Run *argv* through the target and record a passing test if it ran one."""
+        merged = {**self.extra_env, **(env_overrides or {})}
+        result = self.target.run(
+            argv,
+            cwd=str(cwd) if cwd is not None else str(self.root),
+            env_overrides=merged,
+            timeout=timeout_seconds if timeout_seconds is not None else self.default_timeout,
+            cancel_event=cancel_event,
+            output_cap=output_cap,
+            phase=phase,
+            network=network,
+        )
+        # The gate matches *command strings*; keep the caller's text when it has
+        # one (a shell step), otherwise render the argv.
+        text = command_text or shlex.join([str(a) for a in argv])
+        return self._record_gate(result, text, scope)
 
-    # -- run ------------------------------------------------------------------
-    def run_command(self, command: str, timeout_seconds: int | None = None, scope: str | None = None) -> str:
-        timeout = min(int(timeout_seconds or self.default_timeout), 3600)
-        env_add = {**EXTRA_ENV, **self.extra_env}
-        self._cancelled = False
-        if self.container:
-            argv = ["docker", "exec", "-w", "/work"]
-            for k, v in env_add.items():
-                argv += ["-e", f"{k}={v}"]
-            argv += [self.container, "timeout", "-k", "5", str(timeout), "bash", "-o", "pipefail", "-lc", command]
-            p = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                                 stderr=subprocess.STDOUT, text=True, errors="replace")
-            wait = timeout + 20
-        else:
-            p = subprocess.Popen(["bash", "-o", "pipefail", "-lc", command], cwd=self.root, env=_safe_env(env_add),
-                                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                 text=True, errors="replace", start_new_session=True)
-            wait = timeout
-        with self._lock:
-            self._proc = p
-        # communicate() collects output; bound the retained result to 1 MiB.
-        # The command itself is subject to , so unbounded growth is limited.
+    def run_command(self, command: str, timeout_seconds: float | None = None, scope: str | None = None) -> str:
+        """Run a shell command and return ``exit code: N\\n<output>``.
+
+        This is the model-facing ``run_command`` tool: the string is a shell
+        step by definition, so it runs as ``bash -o pipefail -c``.  Pipeline
+        steps should call :meth:`run_argv` instead.
+        """
+        result = self.run_argv(
+            shell_argv(command),
+            timeout_seconds=timeout_seconds,
+            scope=scope,
+            phase=PHASE_RUN,
+            command_text=command,
+        )
+        text = f"exit code: {result.exit_code}\n{truncate(result.output)}"
+        if VERIFICATION_NOTE in result.notes:
+            text += "\n[verification: counted as a passing test run]"
+        if result.error:
+            text += f"\n{result.error}"
+        return text
+
+    def _record_gate(self, result: RunResult, command: str, scope: str | None) -> RunResult:
+        if self.gate is None or not command:
+            return result
         try:
-            try:
-                out, _ = p.communicate(timeout=wait)
-                rc = p.returncode
-            except subprocess.TimeoutExpired:
-                try:
-                    if self.container:
-                        p.kill()
-                    else:
-                        os.killpg(os.getpgid(p.pid), signal.SIGKILL)
-                except Exception:
-                    pass
-                out, _ = p.communicate()
-                out = (out or "") + f"\n[timed out after {timeout}s and was killed]"
-                rc = 124
-        finally:
-            with self._lock:
-                self._proc = None
-        out = (out or "")[:1024 * 1024]
-        if self._cancelled:
-            out = (out or "") + "\n[cancelled]"
-            rc = 130
-        note = ""
-        keys = self.gate.counts_as_test(command, rc, out or "", scope)
-        if keys:
-            self.gate.record_pass(keys, scope)
-            note = "\n[verification: counted as a passing test run]"
-        return f"exit code: {rc}\n{truncate(out or '')}{note}"
+            keys = self.gate.counts_as_test(command, result.exit_code, result.output, scope)
+        except Exception:  # pragma: no cover - a gate bug must not hide a result
+            return result
+        if not keys:
+            return result
+        self.gate.record_pass(keys, scope)
+        return RunResult(
+            argv=result.argv,
+            exit_code=result.exit_code,
+            output=result.output,
+            duration=result.duration,
+            timed_out=result.timed_out,
+            cancelled=result.cancelled,
+            truncated=result.truncated,
+            mode=result.mode,
+            network=result.network,
+            weaker_isolation=result.weaker_isolation,
+            error=result.error,
+            notes=(*result.notes, VERIFICATION_NOTE),
+        )

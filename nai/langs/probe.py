@@ -81,11 +81,14 @@ def _first_line(text: str) -> str:
 
 
 def _default_run(argv: list[str], cwd: Path) -> tuple[int, str]:
+    """Run one ``--version`` probe through the shared execution target."""
+    from ..exec import PHASE_RUN, LocalTarget
+
     try:
-        proc = subprocess.run(argv, cwd=str(cwd), capture_output=True, text=True, check=False, timeout=20)
+        result = LocalTarget(cwd, default_timeout=20).run(argv, cwd=str(cwd), timeout=20, phase=PHASE_RUN)
     except (OSError, subprocess.SubprocessError) as exc:  # pragma: no cover - defensive
         return 1, str(exc)
-    return proc.returncode, (proc.stdout or "") + (proc.stderr or "")
+    return result.exit_code, result.output
 
 
 def _worker_path(root: Path | None, base_path: str) -> str:

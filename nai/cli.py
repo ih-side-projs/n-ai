@@ -95,7 +95,8 @@ def main(argv: list[str] | None = None) -> None:
     if a.output_dir and a.spec and a.spec != "-":
         base = paths.validate_output_root(a.output_dir)
         workspace_root = layout.project_root(base, layout.slugify(Path(a.spec).stem))
-    ws = Workspace(workspace_root, a.cmd_timeout, a.docker, git=not a.no_git, test_cmds=a.test_cmd, gate=not a.no_gate)
+    ws = Workspace(workspace_root, a.cmd_timeout, a.docker, git=not a.no_git, test_cmds=a.test_cmd, gate=not a.no_gate,
+                   on_note=lambda kind, message: terminal.log("exec", f"{kind}: {message}", "yellow"))
     terminal.set_transcript(ws.root / ".agent" / "transcript.log")
     coder = Coder(client, ws, a.coder_max_steps, a.coder_bash)
     orch = Orchestrator(client, ws, coder, max_steps=a.max_steps)

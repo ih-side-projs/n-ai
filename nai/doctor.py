@@ -261,6 +261,20 @@ def check_language_support() -> CheckResult:
     )
 
 
+def check_execution_target() -> CheckResult:
+    """Check the single command-execution seam and its hardening probes."""
+    mod = importlib.import_module("nai.exec")
+    try:
+        with tempfile.TemporaryDirectory(prefix="nai-doctor-exec-") as root:
+            target = mod.make_target(root)
+            try:
+                return CheckResult("execution-target", True, target.describe())
+            finally:
+                target.close()
+    except Exception as exc:  # noqa: BLE001 - a probe failure is a doctor result
+        return CheckResult("execution-target", False, f"{type(exc).__name__}: {exc}")
+
+
 def check_store() -> CheckResult:
     """Check store."""
     store_mod = importlib.import_module("nai.store.store")
@@ -299,6 +313,7 @@ CHECKS: tuple[tuple[str, Callable[[], CheckResult]], ...] = (
     ("schema-artifacts", check_schemas),
     ("package-data", check_package_data),
     ("language-support", check_language_support),
+    ("execution-target", check_execution_target),
     ("store-migrations", check_store),
     ("tool-registry", check_tool_registry),
 )

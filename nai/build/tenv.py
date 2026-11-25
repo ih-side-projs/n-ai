@@ -9,12 +9,21 @@ import platform
 import re
 import shlex
 import shutil
-import subprocess
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+from ..exec import (
+    PHASE_RUN,
+    PHASE_SETUP,
+    ExecutionTarget,
+    LocalTarget,
+    RunResult,
+    needs_shell,
+    shell_argv,
+)
 
 
 class TargetEnvError(RuntimeError):
@@ -210,7 +219,38 @@ def load_api_notes(
 
 
 class TargetEnvManager:
-    """Manages per-project virtualenvs, deprecation warning flags, and lint gates (TENV-2, TENV-3)."""
+    """Manages per-project virtualenvs, deprecation warning flags, and lint gates (TENV-2, TENV-3).
+
+    *target* is the :class:`nai.exec.ExecutionTarget` setup commands run through.
+    When omitted, a local target is created lazily so direct callers (tests and
+    library users) keep working.
+    """
+
+    def __init__(self, target: ExecutionTarget | None = None):
+        self.target = target
+
+    def _target_for(self, workspace_root: Path) -> ExecutionTarget:
+        if self.target is None:
+            self.target = LocalTarget(workspace_root, default_timeout=600)
+        return self.target
+
+    def _run(
+        self,
+        workspace_root: Path,
+        argv: list[str],
+        *,
+        phase: str = PHASE_SETUP,
+        timeout: float = 600,
+        env_overrides: dict[str, str] | None = None,
+    ) -> RunResult:
+        """Run one setup command through the execution target."""
+        return self._target_for(workspace_root).run(
+            argv,
+            cwd=str(workspace_root),
+            env_overrides=env_overrides,
+            timeout=timeout,
+            phase=phase,
+        )
 
     def venv_path(self, workspace_root: Path, tenv: TargetEnv) -> Path:
         p = Path(tenv.venv_dir)
@@ -270,14 +310,10 @@ class TargetEnvManager:
         base_python = self._select_base_python(tenv)
         vp.parent.mkdir(parents=True, exist_ok=True)
         if not py_exe.exists():
-            proc = subprocess.run(
-                [base_python, "-m", "venv", str(vp)],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            if proc.returncode != 0:
-                raise TargetEnvError(f"venv creation failed: {proc.stderr or proc.stdout}")
+            # setup phase: network allowed (venv creation itself does not use it)
+            res = self._run(workspace_root, [base_python, "-m", "venv", str(vp)], phase=PHASE_SETUP)
+            if res.exit_code != 0:
+                raise TargetEnvError(f"venv creation failed: {res.output or res.error}")
             py_exe = self.venv_python(workspace_root, tenv)
 
         if tenv.packages:
@@ -311,11 +347,12 @@ class TargetEnvManager:
         if all(self._is_hash_pin(p) for p in tenv.packages):
             cmd.append("--require-hashes")
         cmd.extend(tenv.packages)
-        proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
-        if proc.returncode != 0:
+        # setup phase: the network is allowed so pip can reach the index
+        res = self._run(workspace_root, cmd, phase=PHASE_SETUP, timeout=1200)
+        if res.exit_code != 0:
             raise TargetEnvError(
                 f"Package installation failed (offline={tenv.offline}): "
-                f"{(proc.stderr or proc.stdout).strip()}"
+                f"{res.output.strip() or res.error}"
             )
 
     def deprecation_warning_filters(self, tenv: TargetEnv) -> list[str]:
@@ -375,12 +412,63 @@ class TargetEnvManager:
         argv = getattr(command, "argv", command)
         return self.wrap_test_command(workspace_root, tenv, shlex.join(argv))
 
+    def command_argv(
+        self,
+        workspace_root: Path,
+        tenv: TargetEnv,
+        command: Any,
+    ) -> tuple[list[str], dict[str, str]]:
+        """Return ``(argv, env_overrides)`` for an adapter ``Command``.
+
+        The adapter owns the argv; this method only applies the Python venv and
+        the warnings-as-errors policy.  A non-Python adapter wraps its own
+        commands in its own ``command_argv``.
+        """
+        argv = [str(part) for part in getattr(command, "argv", command)]
+        venv_bin = self.venv_bin_dir(self.venv_path(workspace_root, tenv))
+        filters = self.deprecation_warning_filters(tenv)
+        overrides = {"PATH": f"{venv_bin}{os.pathsep}{os.environ.get('PATH', '')}"}
+        if not argv:
+            return argv, overrides
+        if getattr(command, "shell", False):
+            # The adapter explicitly marked this step as a shell step.  It owns
+            # the command string, so the venv python substitution does not apply.
+            overrides["PYTHONWARNINGS"] = ",".join(filters)
+            return shell_argv(shlex.join(argv)), overrides
+        py_exe = str(self.venv_python(workspace_root, tenv))
+        warn_flags = [flag for f in filters for flag in ("-W", f)]
+        head = argv[0]
+        if head in ("pytest", "py.test"):
+            # The -W flags reach the interpreter directly; PYTHONWARNINGS would
+            # also leak into child processes, so it is only set for commands
+            # that do not take python flags.
+            return [py_exe, *warn_flags, "-m", "pytest", *argv[1:]], overrides
+        if head in ("python", "python3") or head.startswith("python3."):
+            return [py_exe, *warn_flags, *argv[1:]], overrides
+        overrides["PYTHONWARNINGS"] = ",".join(filters)
+        return argv, overrides
+
+    def command_argv_for_string(
+        self,
+        workspace_root: Path,
+        tenv: TargetEnv,
+        command: str,
+    ) -> tuple[list[str], dict[str, str]]:
+        """Like :meth:`command_argv` for a user-supplied command string.
+
+        A string that uses shell syntax becomes an explicit shell step; a plain
+        command is split into argv without ever invoking a shell.
+        """
+        argv = shell_argv(command) if needs_shell(command) else shlex.split(command)
+        return self.command_argv(workspace_root, tenv, argv)
+
     def run_lint_gate(
         self,
         workspace_root: Path,
         tenv: TargetEnv,
         target_paths: list[str],
         run_cmd: Callable[[str], tuple[int, str]] | None = None,
+        run_argv: Callable[[list[str]], tuple[int, str]] | None = None,
     ) -> LintResult:
         """Run Ruff (UP, B) and optional type checker inside target environment (TENV-3)."""
         if not target_paths:
@@ -393,16 +481,13 @@ class TargetEnvManager:
         passed = True
 
         def _exec(cmd_str: str) -> tuple[int, str]:
+            if run_argv is not None:
+                return run_argv(shlex.split(cmd_str))
             if run_cmd is not None:
                 return run_cmd(cmd_str)
-            proc = subprocess.run(
-                shlex.split(cmd_str),
-                cwd=str(workspace_root),
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            return proc.returncode, (proc.stdout + "\n" + proc.stderr).strip()
+            # lint runs during verify: no network
+            res = self._run(workspace_root, shlex.split(cmd_str), phase=PHASE_RUN)
+            return res.exit_code, res.output.strip()
 
         def _find_tool(name: str) -> str | None:
             local = venv_bin / name

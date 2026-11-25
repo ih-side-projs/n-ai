@@ -37,6 +37,23 @@ class _HostPyWorkspace(FakeWorkspace):
             self._verified_cmds.add(requested)
         return rc, out
 
+    def run_argv(self, argv, *, phase="run", env_overrides=None, network=None):
+        """Rewrite a fresh-venv python to the host interpreter, like run_command does."""
+        import shlex
+
+        argv = [str(a) for a in argv]
+        requested = shlex.join(argv)
+        if argv and argv[0].endswith("python") and ("-m" in argv or "-c" in argv):
+            argv[0] = sys.executable
+        # A fresh target venv has pytest but no third-party plugins.  The host
+        # interpreter has pytest-asyncio, whose own deprecation warning would
+        # otherwise be escalated by the pipeline's -W error policy.
+        merged = {"PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1", **(env_overrides or {})}
+        rc, out = super().run_argv(argv, phase=phase, env_overrides=merged, network=network)
+        if rc == 0 and self._ctx and getattr(self._ctx, "test_command", None) == requested:
+            self._verified_cmds.add(requested)
+        return rc, out
+
 
 def _setup_project_and_leaf(tmp_path: Path, *, extra_settings: dict | None = None):
     store = FakeStore(tmp_path)

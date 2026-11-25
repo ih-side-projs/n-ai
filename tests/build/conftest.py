@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import itertools
 import json
+import os
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -268,6 +269,20 @@ class FakeWorkspace:
         out = (proc.stdout + "\n" + proc.stderr).strip()
         if proc.returncode == 0 and self._ctx and getattr(self._ctx, "test_command", None) == cmd:
             self._verified_cmds.add(cmd)
+        return proc.returncode, out
+
+    def run_argv(self, argv: Any, *, phase: str = "run", env_overrides: dict | None = None,
+                 network: bool | None = None) -> tuple[int, str]:
+        """Run argv without a shell, mirroring the real workspace's run_argv."""
+        import shlex
+
+        argv = [str(a) for a in argv]
+        text = shlex.join(argv)
+        env = {**os.environ, **(env_overrides or {})}
+        proc = subprocess.run(argv, cwd=str(self.root), capture_output=True, text=True, env=env)
+        out = (proc.stdout + "\n" + proc.stderr).strip()
+        if proc.returncode == 0 and self._ctx and getattr(self._ctx, "test_command", None) == text:
+            self._verified_cmds.add(text)
         return proc.returncode, out
 
     def verification_problem(self) -> str | None:

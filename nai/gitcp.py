@@ -1,10 +1,20 @@
 """git-checkpoint: workspace snapshots as local git commits (v1 + CORE-5)."""
 from __future__ import annotations
 
-import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 
+from .exec import PHASE_RUN, LocalTarget
+
 GITIGNORE = ".agent/\nnode_modules/\n.venv/\nvenv/\n__pycache__/\n*.pyc\n.pytest_cache/\n.nai/\n.nai-project\n"
+
+
+@dataclass(frozen=True)
+class GitResult:
+    """The slice of ``CompletedProcess`` this module uses."""
+
+    returncode: int
+    stdout: str
 
 
 class GitCheckpoint:
@@ -12,10 +22,16 @@ class GitCheckpoint:
         self.root = Path(root)
         self.enabled = enabled
         self.identity = identity
+        self._target = LocalTarget(self.root, default_timeout=120)
 
-    def _git(self, *a: str) -> subprocess.CompletedProcess:
-        return subprocess.run(["git", "-c", f"user.name={self.identity[0]}", "-c", f"user.email={self.identity[1]}", *a],
-                              cwd=self.root, capture_output=True, text=True)
+    def _git(self, *a: str) -> GitResult:
+        result = self._target.run(
+            ["git", "-c", f"user.name={self.identity[0]}", "-c", f"user.email={self.identity[1]}", *a],
+            cwd=str(self.root),
+            timeout=120,
+            phase=PHASE_RUN,
+        )
+        return GitResult(returncode=result.exit_code, stdout=result.output)
 
     def checkpoint(self, msg: str) -> None:
         """R1-R5: init on first use, `git add -A`, commit; failures are ignored."""
@@ -23,7 +39,10 @@ class GitCheckpoint:
             return
         try:
             if not (self.root / ".git").exists():
-                self._git("init", "-q")
+                init = self._git("init", "-q")
+                if init.returncode == 127:  # git is not installed
+                    self.enabled = False
+                    return
                 gi = self.root / ".gitignore"
                 if not gi.exists():
                     gi.write_text(GITIGNORE)

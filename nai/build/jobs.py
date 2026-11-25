@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from .. import manifest, paths
+from ..exec import PHASE_RUN, needs_shell, shell_argv
 from ..langs import knowledge, registry
 from .context_pack import assemble_context_pack
 from .escalation import raise_change_request
@@ -72,6 +73,32 @@ def _unpack_cmd_result(res: Any) -> tuple[int, str]:
     return 0, text
 
 
+def _exec_target(ctx: Any) -> Any:
+    """The workspace's execution target, when the workspace exposes one."""
+    return getattr(ctx.ws, "exec_target", None)
+
+
+def _run_argv(
+    ctx: Any,
+    argv: Any,
+    *,
+    phase: str = PHASE_RUN,
+    env_overrides: dict[str, str] | None = None,
+    network: bool | None = None,
+) -> tuple[int, str]:
+    """Run argv through the workspace's execution target and unpack the result."""
+    res = ctx.ws.run_argv(
+        argv, phase=phase, env_overrides=env_overrides, network=network
+    )
+    return _unpack_cmd_result(res)
+
+
+def _run_string(ctx: Any, command: str, **kwargs: Any) -> tuple[int, str]:
+    """Run a command string; shell syntax becomes an explicit shell step."""
+    argv = shell_argv(command) if needs_shell(command) else shlex.split(command)
+    return _run_argv(ctx, argv, **kwargs)
+
+
 def _workspace_root(ctx: Any) -> Path:
     if ctx.ws is not None and getattr(ctx.ws, "root", None) is not None:
         return Path(ctx.ws.root)
@@ -96,21 +123,6 @@ def _safe_rel_test_path(raw_path: str, node: dict[str, Any], adapter: Any) -> st
 def _adapter_for(project: dict[str, Any]) -> Any:
     """Return the language adapter selected by ``project.settings.language``."""
     return registry.language_for(project)
-
-
-def _apply_env_overrides(
-    adapter: Any, project: dict[str, Any], workspace_root: Path, command: str
-) -> str:
-    """Prefix *command* with the adapter's environment overrides.
-
-    The previous code hard-coded ``PYTHONPATH=src``; the adapter supplies the
-    same mapping for Python.  Windows keeps the historical bare command.
-    """
-    overrides = adapter.env_overrides(project, workspace_root)
-    if not overrides or os.name == "nt":
-        return command
-    prefix = " ".join(f"{key}={shlex.quote(value)}" for key, value in overrides.items())
-    return f"{prefix} {command}"
 
 
 def _ensure_running(store: Any, node: dict[str, Any]) -> dict[str, Any]:
@@ -195,7 +207,7 @@ def handle_contract_stub(ctx: Any) -> Any:
     parent_contract = _parent_contract(ctx.store, node)
 
     tenv = parse_target_env(project, ws_root)
-    tenv_mgr = TargetEnvManager()
+    tenv_mgr = TargetEnvManager(_exec_target(ctx))
     tenv_mgr.ensure_env(ws_root, tenv)
     py_exe = str(tenv_mgr.venv_python(ws_root, tenv))
 
@@ -214,7 +226,9 @@ def handle_contract_stub(ctx: Any) -> Any:
             ctx.artifact("code", sf.content, Path(sf.rel_path).name)
 
         def _run(cmd: str) -> tuple[int, str]:
-            return _unpack_cmd_result(ctx.ws.run_command(cmd))
+            # The adapter hands us a shell-quoted string; split it into argv so
+            # no shell is involved (run phase: no network).
+            return _run_string(ctx, cmd, phase=PHASE_RUN)
 
         ok, out = adapter.validate_stub(ws_root, stub_res.module_import, _run, executable=py_exe)
         if not ok:
@@ -264,7 +278,7 @@ def handle_author_tests(ctx: Any) -> Any:
     parent_contract = _parent_contract(ctx.store, node)
 
     tenv = parse_target_env(project, ws_root)
-    tenv_mgr = TargetEnvManager()
+    tenv_mgr = TargetEnvManager(_exec_target(ctx))
     tenv_mgr.ensure_env(ws_root, tenv)
 
     is_integration = node.get("kind") == "integration"
@@ -343,8 +357,8 @@ def handle_author_tests(ctx: Any) -> Any:
     test_rel = _safe_rel_test_path(parsed["file_path"], node, adapter)
     test_cmd = adapter.test_command(project, node, paths=(test_rel,))
     raw_test_cmd = shlex.join(test_cmd.argv)
-    wrapped_cmd = tenv_mgr.wrap_adapter_command(ws_root, tenv, test_cmd)
-    env_cmd = _apply_env_overrides(adapter, project, ws_root, wrapped_cmd)
+    test_argv, test_env = tenv_mgr.command_argv(ws_root, tenv, test_cmd)
+    test_env = {**adapter.env_overrides(project, ws_root), **test_env}
 
     # Validate tests RUN and FAIL against NotImplementedError stubs (BLD-3)
     policy = _path_policy(writable=(test_rel,), readonly=("src/**", ".nai/**"))
@@ -358,7 +372,7 @@ def handle_author_tests(ctx: Any) -> Any:
         for stub_round in range(4):
             ctx.check()
             _write_via_ws(ctx.ws, ws_root, test_rel, code)
-            rc, out = _unpack_cmd_result(ctx.ws.run_command(env_cmd))
+            rc, out = _run_argv(ctx, test_argv, phase=PHASE_RUN, env_overrides=test_env)
             # A real syntax error in the test itself is never an acceptable
             # pre-implementation failure.  BLD-3: a valid failing test must fail
             # *because the stub is not implemented*; assert False / NameError are
@@ -477,7 +491,7 @@ def handle_implement(ctx: Any) -> Any:
     parent_contract = _parent_contract(ctx.store, node)
 
     tenv = parse_target_env(project, ws_root)
-    TargetEnvManager().ensure_env(ws_root, tenv)
+    TargetEnvManager(_exec_target(ctx)).ensure_env(ws_root, tenv)
     tools_bundle = build_tools_bundle(ctx.store, project, node, ws_root)
 
     coder_ctx = 32768
@@ -582,8 +596,8 @@ def _run_final_acceptance(ctx: Any, ws_root: Path, tenv: TargetEnv, tenv_mgr: Ta
         return True, ""
 
     for cmd in test_cmds:
-        wrapped = tenv_mgr.wrap_test_command(ws_root, tenv, str(cmd))
-        rc, out = _unpack_cmd_result(ctx.ws.run_command(wrapped))
+        argv, env = tenv_mgr.command_argv_for_string(ws_root, tenv, str(cmd))
+        rc, out = _run_argv(ctx, argv, phase=PHASE_RUN, env_overrides=env)
         if rc != 0:
             return False, f"Project acceptance command failed `{cmd}`:\n{out}"
     return True, "All project acceptance commands passed."
@@ -607,18 +621,18 @@ def handle_verify(ctx: Any) -> Any:
         node = ctx.store.get_node(node["id"]) or node
 
     tenv = parse_target_env(project, ws_root)
-    tenv_mgr = TargetEnvManager()
+    tenv_mgr = TargetEnvManager(_exec_target(ctx))
     tenv_mgr.ensure_env(ws_root, tenv)
 
     adapter = _adapter_for(project)
     test_records = list(ctx.store.list_test_records(node["id"]) or [])
+    test_cmd = None
     raw_test_cmd = node.get("test_command")
     if not raw_test_cmd and test_records:
-        raw_test_cmd = shlex.join(
-            adapter.test_command(
-                project, node, paths=tuple(tr["file_path"] for tr in test_records)
-            ).argv
+        test_cmd = adapter.test_command(
+            project, node, paths=tuple(tr["file_path"] for tr in test_records)
         )
+        raw_test_cmd = shlex.join(test_cmd.argv)
     if not raw_test_cmd:
         _fail_node(ctx.store, node["id"], "No test_command or frozen TestRecord found")
         return _make_job_result(False, error="No test_command configured")
@@ -660,14 +674,18 @@ def handle_verify(ctx: Any) -> Any:
             return _make_job_result(False, error=reason, missing_requirements=trace.missing)
 
     # 3. Run test_command inside target env with -W error::DeprecationWarning (TENV-2, CORE-4)
-    wrapped_cmd = tenv_mgr.wrap_test_command(ws_root, tenv, raw_test_cmd)
-    effective_cmd = _apply_env_overrides(adapter, project, ws_root, wrapped_cmd)
+    if test_cmd is not None:
+        test_argv, test_env = tenv_mgr.command_argv(ws_root, tenv, test_cmd)
+    else:
+        test_argv, test_env = tenv_mgr.command_argv_for_string(ws_root, tenv, raw_test_cmd)
+    test_env = {**adapter.env_overrides(project, ws_root), **test_env}
+    effective_cmd = shlex.join(test_argv)
     policy = _path_policy(writable=(), readonly=("src/**", "tests/**", ".nai/**"))
 
     with ctx.ws.job_context(
         _job_context(node["id"], "verify", ctx.job.get("attempt", 1), policy, test_command=effective_cmd)
     ):
-        rc, test_out = _unpack_cmd_result(ctx.ws.run_command(effective_cmd))
+        rc, test_out = _run_argv(ctx, test_argv, phase=PHASE_RUN, env_overrides=test_env)
         gate_problem = ctx.ws.verification_problem() if hasattr(ctx.ws, "verification_problem") else None
 
         # 4. Lint & type-check gate (TENV-3)
@@ -679,7 +697,7 @@ def handle_verify(ctx: Any) -> Any:
             ws_root,
             tenv,
             lint_targets,
-            run_cmd=lambda c: _unpack_cmd_result(ctx.ws.run_command(c)),
+            run_argv=lambda argv: _run_argv(ctx, argv, phase=PHASE_RUN),
         )
 
     combined_output = test_out
@@ -779,7 +797,7 @@ def handle_integrate(ctx: Any) -> Any:
     parent_contract = parent.get("contract") if parent else {}
 
     tenv = parse_target_env(project, ws_root)
-    TargetEnvManager().ensure_env(ws_root, tenv)
+    TargetEnvManager(_exec_target(ctx)).ensure_env(ws_root, tenv)
     tools_bundle = build_tools_bundle(ctx.store, project, node, ws_root)
 
     adapter = _adapter_for(project)

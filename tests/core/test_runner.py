@@ -95,8 +95,9 @@ def test_R5_R6_docker_commands_and_cleanup(tmp_path, fake_docker):
     assert r.run_command("echo $CI-$X") == "exit code: 0\n1-1\n"
     ex = [json.loads(line) for line in fake_docker.read_text().splitlines()][-1]
     assert ex[:3] == ["exec", "-w", "/work"] and "CI=1" in ex and "X=1" in ex
-    assert ex[-5:] == ["bash", "-o", "pipefail", "-lc", "echo $CI-$X"]
-    assert ex[ex.index("timeout"):ex.index("timeout") + 4] == ["timeout", "-k", "5", "10"]
+    # no `bash -lc`: the shell step is explicit and never a login shell
+    assert ex[-5:] == ["bash", "-o", "pipefail", "-c", "echo $CI-$X"]
+    assert "timeout" not in ex                                            # timeouts are the target's job
     name = r.container
     r.close()
     r.close()                                                              # idempotent

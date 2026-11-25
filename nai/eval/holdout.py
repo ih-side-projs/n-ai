@@ -7,11 +7,13 @@ quality metric (not merely "the CLI exited 0").
 from __future__ import annotations
 
 import shutil
-import subprocess
+import sys
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+from ..exec import PHASE_RUN, LocalTarget
 
 
 @dataclass
@@ -78,11 +80,18 @@ def run_holdout(holdout_path: Path, workspace: Path, timeout: int = 300) -> Hold
             shutil.copy2(holdout_path, tests_dir / holdout_path.name)
 
         try:
-            proc = subprocess.run(
-                ["python", "-m", "pytest", "-q", str(tests_dir)],
-                cwd=target, capture_output=True, text=True, timeout=timeout,
+            # Every command goes through the execution target: scrubbed env,
+            # no network, resource limits, real timeout.
+            target_exec = LocalTarget(target, default_timeout=timeout)
+            run = target_exec.run(
+                [sys.executable, "-m", "pytest", "-q", str(tests_dir)],
+                cwd=str(target),
+                timeout=timeout,
+                phase=PHASE_RUN,
             )
-            result.output = (proc.stdout or "") + (proc.stderr or "")
+            result.output = run.output
+            if run.timed_out:
+                result.errors.append(f"hold-out tests timed out after {timeout}s")
             # Parse pytest summary line: "N passed, M failed" / "N passed"
             import re
 
@@ -94,10 +103,8 @@ def run_holdout(holdout_path: Path, workspace: Path, timeout: int = 300) -> Hold
             if m_err:
                 result.failed += int(m_err.group(1))
             result.total = result.passed + result.failed
-            if proc.returncode not in (0, 1) and not result.total:
-                result.errors.append(f"pytest exit {proc.returncode}")
-        except subprocess.TimeoutExpired:
-            result.errors.append(f"hold-out tests timed out after {timeout}s")
+            if run.exit_code not in (0, 1) and not result.total:
+                result.errors.append(f"pytest exit {run.exit_code}")
         except Exception as exc:  # noqa: BLE001
             result.errors.append(f"{type(exc).__name__}: {exc}")
     return result

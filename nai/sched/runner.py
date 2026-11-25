@@ -208,13 +208,21 @@ class Runner:
                 self._ws[pid] = self.workspace_factory(project) if project.get("workspace_path") else None
             return self._ws[pid]
 
-    @staticmethod
-    def _default_workspace(project: dict):
+    def _default_workspace(self, project: dict):
         from ..workspace import Workspace
         s = as_obj(project.get("settings"), {}) or {}
+        pid = project["id"]
+
+        def _note(event_type: str, message: str) -> None:
+            """Record execution-target warnings (e.g. weaker isolation) as events."""
+            try:
+                self.store.record_event(pid, event_type, message, level="warning")
+            except Exception:  # noqa: BLE001 - a note must never break a run
+                pass
+
         return Workspace(Path(project["workspace_path"]), cmd_timeout=int(s.get("cmd_timeout", 600)),
                          docker_image=s.get("docker_image"), git=bool(s.get("git", True)),
-                         test_cmds=list(s.get("test_commands") or []))
+                         test_cmds=list(s.get("test_commands") or []), on_note=_note)
 
     def node_usage(self, node: dict | None, extra_tokens: int = 0, extra_seconds: float = 0.0) -> Usage:
         if not node:

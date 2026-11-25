@@ -63,11 +63,32 @@ def test_pipeline_resolves_the_selected_adapter():
 def test_env_overrides_come_from_the_adapter(tmp_path: Path):
     adapter = registry.get("python")
     project = {"name": "Tiny Lib", "settings": {"language": "python"}}
-    wrapped = jobs._apply_env_overrides(
-        adapter, project, tmp_path, "pytest -q tests/test_text.py"
+    # The adapter owns the mapping; the pipeline forwards it as an environment
+    # override to the execution target rather than prefixing a shell command.
+    overrides = adapter.env_overrides(project, tmp_path)
+    assert overrides == {"PYTHONPATH": "src"}
+
+    captured: dict[str, object] = {}
+
+    class _WS:
+        def run_argv(self, argv, **kwargs):
+            captured["argv"] = list(argv)
+            captured.update(kwargs)
+            return 0, "ok"
+
+    class _Ctx:
+        ws = _WS()
+
+    rc, out = jobs._run_argv(
+        _Ctx(),
+        ["pytest", "-q", "tests/test_text.py"],
+        phase="run",
+        env_overrides=overrides,
     )
-    assert "PYTHONPATH=" in wrapped
-    assert "pytest -q tests/test_text.py" in wrapped
+    assert (rc, out) == (0, "ok")
+    assert captured["env_overrides"] == {"PYTHONPATH": "src"}
+    # No shell prefix: the command stays argv all the way to the target.
+    assert "PYTHONPATH" not in " ".join(captured["argv"])
 
 
 def test_python_adapter_declares_its_test_framework():
