@@ -221,6 +221,53 @@ class PythonAdapter:
     ) -> dict[str, str]:
         return {"PYTHONPATH": "src"}
 
+    # -- environment and workspace -----------------------------------------
+    def needs_target_env(self) -> bool:
+        """Python builds inside a pinned virtualenv."""
+        return True
+
+    def prepare_workspace(self, project: dict[str, Any], workspace_root: Path) -> tuple[str, ...]:
+        """Python's layout needs no generated manifest."""
+        return ()
+
+    def environment_block(self, project: dict[str, Any], workspace_root: Path) -> str:
+        from ..build.tenv import format_env_block, parse_target_env
+
+        return format_env_block(parse_target_env(project, workspace_root))
+
+    def extract_test_functions(self, test_sources: dict[str, str]) -> tuple[list[str], list[str]]:
+        from ..build.traceability import extract_test_functions
+
+        return extract_test_functions(test_sources)
+
+    def platform_lint(
+        self,
+        project: dict[str, Any],
+        node: dict[str, Any],
+        workspace_root: Path,
+        *,
+        platform: str = "any",
+    ) -> tuple[str, ...]:
+        """Python has no platform-restricted imports to enforce."""
+        return ()
+
+    # -- remote execution ---------------------------------------------------
+    def remote_recipe(
+        self, project: dict[str, Any], node: dict[str, Any], job_kind: str, *, platform: str = "any"
+    ) -> str:
+        return "verify" if job_kind in ("verify", "author_tests", "integrate") else job_kind
+
+    def remote_params(
+        self,
+        project: dict[str, Any],
+        node: dict[str, Any],
+        job_kind: str,
+        *,
+        targets: tuple[str, ...] = (),
+        platform: str = "any",
+    ) -> dict[str, Any]:
+        return {"targets": list(targets)}
+
     # -- results -----------------------------------------------------------
     def parse_result(
         self,

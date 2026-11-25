@@ -17,8 +17,10 @@ from .base import (
     ToolCheck,
 )
 from .python import PythonAdapter
+from .swift import SwiftAdapter
 
 registry.register(PythonAdapter())
+registry.register(SwiftAdapter())
 
 __all__ = [
     "Command",

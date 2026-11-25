@@ -213,6 +213,17 @@ def render_argv(
     return argv
 
 
+#: Destinations ``xcodebuild-test`` may target.  An allowlist, not free text:
+#: the orchestrator picks one of these and the worker never builds an argv.
+XCODE_DESTINATIONS: tuple[str, ...] = (
+    "platform=macOS",
+    "generic/platform=macOS",
+    "platform=iOS Simulator,name=iPhone 16",
+    "platform=iOS Simulator,name=iPhone 15",
+    "platform=iOS Simulator,name=iPad Pro 13-inch (M4)",
+)
+
+
 #: Recipes the orchestrator may queue.  A worker's ``worker.toml`` may define
 #: a subset of these (never an id that is missing here).
 RECIPES: dict[str, RecipeSpec] = {
@@ -255,6 +266,30 @@ RECIPES: dict[str, RecipeSpec] = {
         capabilities=("python",),
         timeout=1800.0,
         description="Run integration tests on the worker.",
+    ),
+    "swift-build": RecipeSpec(
+        id="swift-build",
+        capabilities=("swift",),
+        timeout=1800.0,
+        description="Compile the Swift package on the worker.",
+    ),
+    "swift-test": RecipeSpec(
+        id="swift-test",
+        params={"filter": ParamSpec("token", required=False)},
+        capabilities=("swift",),
+        timeout=3600.0,
+        description="Run XCTest on the worker (`swift test --filter`).",
+    ),
+    "xcodebuild-test": RecipeSpec(
+        id="xcodebuild-test",
+        params={
+            "xcode_project": ParamSpec("relpath"),
+            "scheme": ParamSpec("token"),
+            "destination": ParamSpec("choice", choices=XCODE_DESTINATIONS),
+        },
+        capabilities=("swift", "macos"),
+        timeout=3600.0,
+        description="Run the owner-supplied Xcode project's tests on macOS.",
     ),
 }
 

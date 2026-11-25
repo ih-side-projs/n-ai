@@ -16,10 +16,12 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
+from ..spec.platforms import PLATFORMS
+from ..spec.platforms import node_platform as _node_platform
 from .errors import RemoteError
 
 MACOS = "macos"
-KNOWN_PLATFORMS = ("any", "linux", "macos")
+KNOWN_PLATFORMS = PLATFORMS
 #: Job kinds whose commands may leave the machine.
 REMOTE_JOB_KINDS = frozenset({"contract_stub", "author_tests", "implement", "verify", "integrate"})
 
@@ -30,28 +32,8 @@ def _contract(node: dict[str, Any] | None) -> dict[str, Any]:
 
 
 def node_platform(store: Any, node: dict[str, Any] | None) -> str:
-    """Return the platform a node builds for (``any`` when unknown).
-
-    A leaf's own contract usually carries no platform; the parent's component
-    list names the leaf and its platform, so both places are checked.
-    """
-    if not node:
-        return "any"
-    own = str(_contract(node).get("platform") or "").strip().lower()
-    if own in KNOWN_PLATFORMS:
-        return own
-    name = str(node.get("name") or "").strip()
-    parent_id = node.get("parent_id")
-    if store is not None and parent_id:
-        try:
-            parent = store.get_node(parent_id)
-        except Exception:  # noqa: BLE001 - a missing parent is not a routing failure
-            parent = None
-        for component in _contract(parent).get("components") or []:
-            if isinstance(component, dict) and str(component.get("name") or "").strip() == name:
-                platform = str(component.get("platform") or "any").strip().lower()
-                return platform if platform in KNOWN_PLATFORMS else "any"
-    return "any"
+    """Return the platform a node builds for (``any`` when unknown)."""
+    return _node_platform(store, node)
 
 
 def subtree_has_platform(store: Any, project_id: str, node_id: str, platform: str = MACOS) -> bool:

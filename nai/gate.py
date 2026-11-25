@@ -25,7 +25,9 @@ TEST_RE = re.compile(
     r"|(?:mvn|mvnw|gradlew?)\b.*\btest\b|npx\s+(?:jest|vitest|mocha)\b")
 NOT_TEST_RE = re.compile(r"--collect-only|--co\b|--help\b|--version\b|--dry-run|--listTests|\s-h\b")
 MASK_RE = re.compile(r"\|\|\s*(?:true|:|exit\s+0)(?!\w)")  # '|| true' / '|| :' hide failures
-ZERO_RE = re.compile(r"collected 0 items|Ran 0 tests|running 0 tests|no tests ran|No tests found", re.I)
+ZERO_RE = re.compile(
+    r"collected 0 items|Ran 0 tests|running 0 tests|no tests ran|No tests found|Executed 0 tests", re.I
+)
 
 
 @dataclass

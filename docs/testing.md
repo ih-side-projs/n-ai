@@ -24,6 +24,9 @@ pytest -q
 | `tests/tools/` | Registry, sandbox, data-files and project-introspection tools |
 | `tests/exec/` | Execution targets: env scrubbing, phases, limits, streaming, cancellation (fake docker daemon) |
 | `tests/remote/` | Remote workers: store leases/claims, snapshots, recipes, API, `RemoteTarget`, routing, CLI, `/workers`, and one real `nai-worker` process |
+| `tests/langs/test_swift_adapter.py` | Swift adapter: naming, stubs, `Package.swift`, parsing (hand-captured Swift 6.0/Xcode 16 samples in `tests/langs/fixtures/swift/`), platform lint, recipes |
+| `tests/build/test_swift_pipeline.py` | Swift handler wiring with a fake SwiftPM/XCTest runner (no toolchain needed) |
+| `tests/e2e/test_pipeline_swift.py` | Swift pipeline end to end; **skipped without `swift`**, run by the CI Swift job |
 | `tests/web/` | Dashboard v1 and v2 (TestClient + httpx ASGITransport) |
 | `tests/e2e/` | Full CLI and web workflows against the real store, runner, command processor and stub LLM |
 | `tests/test_end_to_end.py` | In-process brief → spec → build → done pipeline |

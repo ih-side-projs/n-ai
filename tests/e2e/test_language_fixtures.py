@@ -64,6 +64,11 @@ def test_e2e_fixture_settings_are_accepted_by_the_store(language_id: str, tmp_pa
 @pytest.mark.parametrize("language_id", registry.supported())
 def test_probe_finds_the_declared_toolchain(language_id: str):
     result = probe.probe(language_id)
+    if not result.ok and language_id != registry.DEFAULT_LANGUAGE:
+        # Host-dependent: the default language's tools must be present, but a
+        # language whose CI job installs its toolchain (Swift) is only probed
+        # where that toolchain exists.  ``nai languages`` reports the gap.
+        pytest.skip(f"{language_id} toolchain not installed on this host: {', '.join(result.missing)}")
     assert result.ok, f"required tools missing for {language_id}: {', '.join(result.missing)}"
 
 

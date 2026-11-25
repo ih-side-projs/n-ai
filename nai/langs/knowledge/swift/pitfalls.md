@@ -1,0 +1,13 @@
+- `fatalError("not implemented")` is deliberate in stubs; never leave it in an implementation.
+- Do not edit `Package.swift` or `Entities.swift`: the adapter regenerates both.
+- A target with no source file fails the build; the stub file must exist first.
+- String indexing with integers does not compile: use `String.Index`, `prefix`, `split`.
+- Force unwrap (`!`) and `try!` crash the test run; use `guard let` and `try`.
+- `@testable import` needs the target to be a library target in the same package.
+- XCTest finds methods starting with `test` that take no arguments; `async throws` is fine.
+- A crash aborts the whole test process: one unimplemented stub hides later results.
+- Swift 6 concurrency: mutable shared state must be an `actor` or `@MainActor`; value types
+  crossing tasks must be `Sendable`.
+- `Task {}` inherits isolation; call `await` inside tests instead of sleeping.
+- Platform: `any`/`linux` components may not import SwiftUI, UIKit or AppKit (verify fails).
+- Keep `Package.swift`'s target names stable: they come from node names.

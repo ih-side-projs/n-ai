@@ -77,7 +77,8 @@ nai languages [--json] [--no-probe] [--worker NAME=PATH ...]
 
 Prints the languages the registry supports (adapter, knowledge pack and
 toolchain probe), then probes each declared tool (`python3 --version`,
-`pytest --version`, `ruff --version` for Python) on this machine and on every
+`pytest --version`, `ruff --version` for Python; `swift --version`,
+`swiftc --version`, `xcodebuild -version` for Swift) on this machine and on every
 named worker root. Worker roots can also come from
 `NAI_LANGUAGE_WORKERS=name=path,name=path`. A worker root's `.venv/bin` and
 `bin` are searched before `PATH`, so a worker checkout's own tools win. The

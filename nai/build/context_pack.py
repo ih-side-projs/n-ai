@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from ..langs import knowledge, registry
-from .tenv import TargetEnv, estimate_tokens, format_env_block, load_api_notes
+from .tenv import TargetEnv, estimate_tokens, load_api_notes
 
 
 @dataclass(frozen=True)
@@ -113,14 +113,23 @@ def assemble_context_pack(
     max_fraction = float(settings.get("context_pack_max_fraction", 0.5))
     max_tokens = max(1, int(coder_ctx_limit * max_fraction))
 
-    env_block = format_env_block(tenv)
+    # Language knowledge is chosen by job kind, never by the model (X2, SS-LANGS).
+    adapter = registry.language_for(project)
+    env_root = Path(workspace_root) if workspace_root is not None else Path(
+        project.get("workspace_path") or "."
+    )
+    env_block_fn = getattr(adapter, "environment_block", None)
+    if callable(env_block_fn):
+        env_block = env_block_fn(project, env_root)
+    else:  # pragma: no cover - partial third-party adapters
+        from .tenv import format_env_block
+
+        env_block = format_env_block(tenv)
     api_notes = (
         load_api_notes(workspace_root, tenv, node.get("spec_text") or "", parent_contract)
         if workspace_root is not None
         else ""
     )
-    # Language knowledge is chosen by job kind, never by the model (X2, SS-LANGS).
-    adapter = registry.language_for(project)
     language_block = knowledge.block(adapter.id, job_kind)
     spec_block = (
         f"## Component Specification: `{node['name']}` ({node['kind']})\n"

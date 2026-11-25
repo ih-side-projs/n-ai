@@ -552,6 +552,20 @@ timeout = 1800
 params = ["targets"]
 argv = ["{{python}}", "-m", "pytest", "{{targets}}", "-q"]
 timeout = 1800
+
+[recipes.swift-build]
+argv = ["swift", "build"]
+timeout = 1800
+
+[recipes.swift-test]
+params = ["filter"]
+argv = ["swift", "test", "--filter", "{{filter}}"]
+timeout = 3600
+
+[recipes.xcodebuild-test]
+params = ["xcode_project", "scheme", "destination"]
+argv = ["xcodebuild", "test", "-project", "{{xcode_project}}", "-scheme", "{{scheme}}", "-destination", "{{destination}}"]
+timeout = 3600
 """
 
 

@@ -15,6 +15,7 @@ from typing import Any
 from .. import manifest, paths
 from ..exec import PHASE_RUN, needs_shell, shell_argv
 from ..langs import knowledge, registry
+from ..langs.base import Outcome
 from ..remote import routing as remote_routing
 from ..remote.recipes import spec_for
 from ..remote.target import RemoteTarget
@@ -28,12 +29,11 @@ from .structured import (
     StructuredOutputError,
     call_structured_json,
 )
-from .stubs import node_stub_rel_path, project_package_name, slugify_module
 from .tenv import (
+    LintResult,
     TargetEnv,
     TargetEnvManager,
     detect_stale_api,
-    format_env_block,
     parse_target_env,
 )
 from .tools_bridge import build_tools_bundle
@@ -191,6 +191,108 @@ def _remote_target(
     )
 
 
+def _ensure_target_env(ctx: Any, project: dict[str, Any], ws_root: Path, adapter: Any) -> tuple[Any, Any]:
+    """Create the pinned environment only when the adapter uses one.
+
+    Python builds inside ``.nai/venv``; Swift uses the host toolchain, so there
+    is nothing to create.  Returns ``(tenv, manager)`` or ``(None, None)``.
+    """
+    if not adapter.needs_target_env():
+        return None, None
+    tenv = parse_target_env(project, ws_root)
+    manager = TargetEnvManager(_exec_target(ctx))
+    manager.ensure_env(ws_root, tenv)
+    return tenv, manager
+
+
+def _prepare_workspace(ctx: Any, project: dict[str, Any], ws_root: Path, adapter: Any) -> tuple[tuple[str, ...], str | None]:
+    """Let the adapter regenerate the files it owns (for example ``Package.swift``).
+
+    Returns ``(written, error)``; an error fails the job rather than running
+    commands against a stale manifest.
+    """
+    try:
+        written = tuple(adapter.prepare_workspace(project, ws_root))
+    except Exception as exc:  # noqa: BLE001 - a broken adapter must fail the job, not crash it
+        return (), f"{type(exc).__name__}: {exc}"
+    for rel in written:
+        path = ws_root / rel
+        try:
+            content = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        try:
+            manifest.record(ws_root, rel, node_id=ctx.job.get("node_id"), stage="generated", content=content)
+        except (OSError, ValueError):
+            pass
+        ctx.artifact("code", content, Path(rel).name)
+    return written, None
+
+
+def _command_argv(
+    ctx: Any, project: dict[str, Any], ws_root: Path, adapter: Any, command: Any
+) -> tuple[list[str], dict[str, str]]:
+    """Wrap an adapter command: Python runs inside its venv, others as declared.
+
+    Accepts a ``Command``, an argv sequence or a plain command string; a string
+    with shell syntax becomes an explicit shell step.
+    """
+    if isinstance(command, str):
+        argv = shell_argv(command) if needs_shell(command) else shlex.split(command)
+    else:
+        argv = [str(part) for part in getattr(command, "argv", command)]
+    if adapter.needs_target_env():
+        tenv = parse_target_env(project, ws_root)
+        return TargetEnvManager(_exec_target(ctx)).command_argv(ws_root, tenv, argv)
+    return argv, {}
+
+
+def _run_lint_gate(
+    ctx: Any,
+    project: dict[str, Any],
+    ws_root: Path,
+    node: dict[str, Any],
+    adapter: Any,
+    tenv: Any,
+    tenv_mgr: Any,
+    lint_targets: list[str],
+    run_argv: Any,
+) -> Any:
+    """Run the adapter's lint command plus its platform import rules.
+
+    An adapter without a lint command (Swift) skips the tool gate; its platform
+    import rules still run, so a portable component cannot import SwiftUI, UIKit
+    or AppKit.
+    """
+    platform = remote_routing.resolved_platform(ctx.store, project, node)
+    findings: list[str] = []
+    tools: list[str] = []
+    raw_parts: list[str] = []
+    passed = True
+    if (
+        lint_targets
+        and tenv_mgr is not None
+        and adapter.lint_command(project, ws_root, tuple(lint_targets)) is not None
+    ):
+        result = tenv_mgr.run_lint_gate(ws_root, tenv, lint_targets, run_argv=run_argv)
+        passed = result.passed
+        findings.extend(result.findings)
+        tools.extend(result.tools_run)
+        raw_parts.append(result.raw_output)
+    platform_findings = adapter.platform_lint(project, node, ws_root, platform=platform)
+    if platform_findings:
+        passed = False
+        findings.extend(platform_findings)
+        tools.append("platform-imports")
+        raw_parts.append("\n".join(platform_findings))
+    return LintResult(
+        passed=passed,
+        findings=findings,
+        raw_output="\n".join(part for part in raw_parts if part).strip(),
+        tools_run=tools,
+    )
+
+
 def _syntax_precheck(ws_root: Path, writable: tuple[str, ...], adapter: Any) -> str | None:
     """Adapter syntax check for files a macos worker would reject on import.
 
@@ -339,12 +441,13 @@ def handle_contract_stub(ctx: Any) -> Any:
         return guard
     parent_contract = _parent_contract(ctx.store, node)
 
-    tenv = parse_target_env(project, ws_root)
-    tenv_mgr = TargetEnvManager(_exec_target(ctx))
-    tenv_mgr.ensure_env(ws_root, tenv)
-    py_exe = str(tenv_mgr.venv_python(ws_root, tenv))
-
     adapter = _adapter_for(project)
+    _tenv, tenv_mgr = _ensure_target_env(ctx, project, ws_root, adapter)
+    py_exe = (
+        str(tenv_mgr.venv_python(ws_root, _tenv))
+        if tenv_mgr is not None and _tenv is not None
+        else None
+    )
     stub_res = adapter.render_stub(project, node, parent_contract)
     writable = tuple(f.rel_path for f in stub_res.files)
     policy = _path_policy(writable=writable, readonly=("tests/**", ".nai/**"))
@@ -357,6 +460,13 @@ def handle_contract_stub(ctx: Any) -> Any:
             except (OSError, ValueError):
                 pass
             ctx.artifact("code", sf.content, Path(sf.rel_path).name)
+
+        # The adapter owns generated build files (Swift's Package.swift); write
+        # them after the stubs so every declared target has sources.
+        _prepared, prepare_error = _prepare_workspace(ctx, project, ws_root, adapter)
+        if prepare_error:
+            _fail_node(ctx.store, node["id"], f"Workspace preparation failed: {prepare_error}")
+            return _make_job_result(False, error=f"Workspace preparation failed: {prepare_error}")
 
         def _run(cmd: str) -> tuple[int, str]:
             # The adapter hands us a shell-quoted string; split it into argv so
@@ -410,9 +520,8 @@ def handle_author_tests(ctx: Any) -> Any:
         return guard
     parent_contract = _parent_contract(ctx.store, node)
 
-    tenv = parse_target_env(project, ws_root)
-    tenv_mgr = TargetEnvManager(_exec_target(ctx))
-    tenv_mgr.ensure_env(ws_root, tenv)
+    adapter = _adapter_for(project)
+    tenv, tenv_mgr = _ensure_target_env(ctx, project, ws_root, adapter)
 
     is_integration = node.get("kind") == "integration"
     if is_integration:
@@ -424,9 +533,6 @@ def handle_author_tests(ctx: Any) -> Any:
         requirements = [{"id": "R1", "text": node.get("objective") or node["name"], "testable": True}]
 
     prompt = get_prompt("author_tests")
-    adapter = _adapter_for(project)
-    pkg = project_package_name(project)
-    mod = slugify_module(node["name"])
     default_test_path = adapter.test_rel(project, node)
 
     # Never include implementation source; only spec, contract interfaces, and TENV-4/5
@@ -434,7 +540,7 @@ def handle_author_tests(ctx: Any) -> Any:
         "node_name": node["name"],
         "node_kind": node["kind"],
         "suggested_test_path": default_test_path,
-        "import_module": f"{pkg}.{mod}",
+        "import_module": adapter.module_import(project, node),
         "objective": node.get("objective") or "",
         "spec_text": node.get("spec_text") or "",
         "requirements": requirements,
@@ -445,7 +551,7 @@ def handle_author_tests(ctx: Any) -> Any:
         {
             "role": "user",
             "content": (
-                f"{format_env_block(tenv)}\n\n"
+                f"{adapter.environment_block(project, ws_root)}\n\n"
                 f"{knowledge.block(adapter.id, 'author_tests')}\n\n"
                 f"Author {adapter.test_framework} tests for this component/integration node.\n"
                 f"Context JSON:\n```json\n{json.dumps(user_payload, indent=2, sort_keys=True)}\n```"
@@ -461,7 +567,7 @@ def handle_author_tests(ctx: Any) -> Any:
         if syntax_error:
             errs.append(syntax_error)
             return errs
-        trace = check_traceability(requirements, {rel_path: code})
+        trace = check_traceability(requirements, {rel_path: code}, extractor=adapter.extract_test_functions)
         if not trace.passed:
             if trace.missing:
                 errs.append(
@@ -490,10 +596,10 @@ def handle_author_tests(ctx: Any) -> Any:
     test_rel = _safe_rel_test_path(parsed["file_path"], node, adapter)
     test_cmd = adapter.test_command(project, node, paths=(test_rel,))
     raw_test_cmd = shlex.join(test_cmd.argv)
-    test_argv, test_env = tenv_mgr.command_argv(ws_root, tenv, test_cmd)
+    test_argv, test_env = _command_argv(ctx, project, ws_root, adapter, test_cmd)
     test_env = {**adapter.env_overrides(project, ws_root), **test_env}
 
-    # Validate tests RUN and FAIL against NotImplementedError stubs (BLD-3)
+    # Validate tests RUN and FAIL against the adapter's stubs (BLD-3)
     policy = _path_policy(writable=(test_rel,), readonly=("src/**", ".nai/**"))
     with ctx.ws.job_context(_job_context(node["id"], "author_tests", ctx.job.get("attempt", 1), policy)):
         # Ensure editable if re-authoring
@@ -505,10 +611,19 @@ def handle_author_tests(ctx: Any) -> Any:
         for stub_round in range(4):
             ctx.check()
             _write_via_ws(ctx.ws, ws_root, test_rel, code)
-            remote_tests = _remote_target(
-                ctx, node, "author_tests", "verify",
-                params={"targets": _argv_targets(test_argv, ws_root)}, ws_root=ws_root,
+            # Regenerate build files after the test file exists so the test
+            # target is declared (SwiftPM needs its Sources/Tests directory).
+            _prepared, prepare_error = _prepare_workspace(ctx, project, ws_root, adapter)
+            if prepare_error:
+                _fail_node(ctx.store, node["id"], f"Workspace preparation failed: {prepare_error}")
+                return _make_job_result(False, error=f"Workspace preparation failed: {prepare_error}")
+            platform = remote_routing.resolved_platform(ctx.store, project, node)
+            recipe = adapter.remote_recipe(project, node, "author_tests", platform=platform)
+            params = adapter.remote_params(
+                project, node, "author_tests",
+                targets=tuple(_argv_targets(test_argv, ws_root)), platform=platform,
             )
+            remote_tests = _remote_target(ctx, node, "author_tests", recipe, params=params, ws_root=ws_root)
             if remote_tests is not None:
                 try:
                     rc, out = _unpack_cmd_result(
@@ -525,7 +640,7 @@ def handle_author_tests(ctx: Any) -> Any:
             # ModuleNotFoundError for exactly the wiring module is the expected
             # pre-implementation state.  Other import failures still go to repair.
             outcome = adapter.parse_result(out, rc, "test")
-            expected_module = f"{pkg}.{mod}" if is_integration else None
+            expected_module = adapter.module_import(project, node) if is_integration else None
             if rc != 0 and adapter.stub_failure_is_valid(
                 outcome, integration=is_integration, expected_module=expected_module
             ):
@@ -635,8 +750,10 @@ def handle_implement(ctx: Any) -> Any:
         return guard
     parent_contract = _parent_contract(ctx.store, node)
 
+    adapter = _adapter_for(project)
     tenv = parse_target_env(project, ws_root)
-    TargetEnvManager(_exec_target(ctx)).ensure_env(ws_root, tenv)
+    if adapter.needs_target_env():
+        TargetEnvManager(_exec_target(ctx)).ensure_env(ws_root, tenv)
     tools_bundle = build_tools_bundle(ctx.store, project, node, ws_root)
 
     coder_ctx = 32768
@@ -671,8 +788,7 @@ def handle_implement(ctx: Any) -> Any:
         return _make_job_result(False, error=msg, needs_decomposition=True)
 
     # Path policy: node may write ONLY its own source files; tests & .nai are strictly read-only
-    adapter = _adapter_for(project)
-    stub_rel = node_stub_rel_path(project, node)
+    stub_rel = adapter.source_rel(project, node)
     writable = adapter.writable_globs(project, node)
     readonly = adapter.protected_globs(project)
     policy = _path_policy(writable=writable, readonly=readonly)
@@ -694,7 +810,7 @@ def handle_implement(ctx: Any) -> Any:
         if tr.get("file_path"):
             context_files.append(tr["file_path"])
 
-    allow_bash, macos_remote = _coder_command_policy(ctx, node)
+    allow_bash, _macos_remote = _coder_command_policy(ctx, node)
 
     with ctx.ws.job_context(
         _job_context(node["id"], "implement", ctx.job.get("attempt", 1), policy)
@@ -709,12 +825,13 @@ def handle_implement(ctx: Any) -> Any:
             _fail_node(ctx.store, node["id"], msg)
             return _make_job_result(False, error=msg)
 
-        if macos_remote:
-            syntax_problem = _syntax_precheck(ws_root, writable, adapter)
-            if syntax_problem:
-                msg = f"Syntax pre-check failed: {syntax_problem}"
-                ctx.event("build.syntax_precheck_failed", msg, level="warning")
-                return _make_job_result(False, error=msg, output=syntax_problem)
+        # Cheap adapter syntax check before a full build (Python: ast, Swift:
+        # `swiftc -parse` when a toolchain is installed).
+        syntax_problem = _syntax_precheck(ws_root, writable, adapter)
+        if syntax_problem:
+            msg = f"Syntax pre-check failed: {syntax_problem}"
+            ctx.event("build.syntax_precheck_failed", msg, level="warning")
+            return _make_job_result(False, error=msg, output=syntax_problem)
 
         if hasattr(ctx.ws, "checkpoint_job"):
             ctx.ws.checkpoint_job()
@@ -739,7 +856,9 @@ def handle_implement(ctx: Any) -> Any:
 # ---------------------------------------------------------------------------
 
 
-def _run_final_acceptance(ctx: Any, ws_root: Path, tenv: TargetEnv, tenv_mgr: TargetEnvManager) -> tuple[bool, str]:
+def _run_final_acceptance(
+    ctx: Any, ws_root: Path, tenv: TargetEnv, tenv_mgr: TargetEnvManager, adapter: Any
+) -> tuple[bool, str]:
     """Run project-wide `--test-cmd` list after root integration passes (BLD-12)."""
     settings = (ctx.project or {}).get("settings") or {}
     test_cmds = list(settings.get("test_cmds") or [])
@@ -747,7 +866,7 @@ def _run_final_acceptance(ctx: Any, ws_root: Path, tenv: TargetEnv, tenv_mgr: Ta
         return True, ""
 
     for cmd in test_cmds:
-        argv, env = tenv_mgr.command_argv_for_string(ws_root, tenv, str(cmd))
+        argv, env = _command_argv(ctx, ctx.project, ws_root, adapter, str(cmd))
         rc, out = _run_argv(ctx, argv, phase=PHASE_RUN, env_overrides=env)
         if rc != 0:
             return False, f"Project acceptance command failed `{cmd}`:\n{out}"
@@ -771,11 +890,10 @@ def handle_verify(ctx: Any) -> Any:
         ctx.store.transition_node_status(node["id"], "verifying", note="Entering verification gate")
         node = ctx.store.get_node(node["id"]) or node
 
-    tenv = parse_target_env(project, ws_root)
-    tenv_mgr = TargetEnvManager(_exec_target(ctx))
-    tenv_mgr.ensure_env(ws_root, tenv)
-
     adapter = _adapter_for(project)
+    tenv, tenv_mgr = _ensure_target_env(ctx, project, ws_root, adapter)
+    if tenv is None:  # Swift and other host-toolchain adapters
+        tenv = parse_target_env(project, ws_root)
     test_records = list(ctx.store.list_test_records(node["id"]) or [])
     test_cmd = None
     raw_test_cmd = node.get("test_command")
@@ -818,34 +936,37 @@ def handle_verify(ctx: Any) -> Any:
     else:
         reqs = list(ctx.store.list_requirements(node["id"]) or [])
     if reqs and test_sources:
-        trace = check_traceability(reqs, test_sources)
+        trace = check_traceability(reqs, test_sources, extractor=adapter.extract_test_functions)
         if not trace.passed:
             reason = f"Traceability check failed; missing requirement tests: {', '.join(trace.missing)}"
             _fail_node(ctx.store, node["id"], reason)
             return _make_job_result(False, error=reason, missing_requirements=trace.missing)
 
     # 3. Run test_command inside target env with -W error::DeprecationWarning (TENV-2, CORE-4)
-    if test_cmd is not None:
-        test_argv, test_env = tenv_mgr.command_argv(ws_root, tenv, test_cmd)
-    else:
-        test_argv, test_env = tenv_mgr.command_argv_for_string(ws_root, tenv, raw_test_cmd)
+    test_argv, test_env = _command_argv(
+        ctx, project, ws_root, adapter, test_cmd if test_cmd is not None else raw_test_cmd
+    )
     test_env = {**adapter.env_overrides(project, ws_root), **test_env}
     effective_cmd = shlex.join(test_argv)
     policy = _path_policy(writable=(), readonly=("src/**", "tests/**", ".nai/**"))
 
-    # Remote routing (Prompt 5): a macos node verifies on a worker.
-    remote_verify = _remote_target(
-        ctx, node, "verify", "verify",
-        params={"targets": _argv_targets(test_argv, ws_root)}, ws_root=ws_root,
+    platform = remote_routing.resolved_platform(ctx.store, project, node)
+    verify_recipe = adapter.remote_recipe(project, node, "verify", platform=platform)
+    verify_params = adapter.remote_params(
+        project, node, "verify",
+        targets=tuple(_argv_targets(test_argv, ws_root)), platform=platform,
     )
+    # Remote routing (Prompt 5): a macos node verifies on a worker.
+    remote_verify = _remote_target(ctx, node, "verify", verify_recipe, params=verify_params, ws_root=ws_root)
 
     def _lint_runner(argv: list[str]) -> tuple[int, str]:
         if remote_verify is None:
             return _run_argv(ctx, argv, phase=PHASE_RUN)
-        lint_target = _remote_target(
-            ctx, node, "verify", "lint",
-            params={"targets": _argv_targets(argv, ws_root)}, ws_root=ws_root,
+        lint_recipe = adapter.remote_recipe(project, node, "lint", platform=platform)
+        lint_params = adapter.remote_params(
+            project, node, "lint", targets=tuple(_argv_targets(argv, ws_root)), platform=platform,
         )
+        lint_target = _remote_target(ctx, node, "verify", lint_recipe, params=lint_params, ws_root=ws_root)
         if lint_target is None:  # pragma: no cover - routing is stable within a job
             return _run_argv(ctx, argv, phase=PHASE_RUN)
         try:
@@ -858,6 +979,11 @@ def handle_verify(ctx: Any) -> Any:
     with ctx.ws.job_context(
         _job_context(node["id"], "verify", ctx.job.get("attempt", 1), policy, test_command=effective_cmd)
     ):
+        # The adapter regenerates the build files it owns before any command runs.
+        _prepared, prepare_error = _prepare_workspace(ctx, project, ws_root, adapter)
+        if prepare_error:
+            _fail_node(ctx.store, node["id"], f"Workspace preparation failed: {prepare_error}")
+            return _make_job_result(False, error=f"Workspace preparation failed: {prepare_error}")
         if remote_verify is not None:
             # A worker run *is* the verification; the local gate cannot match a
             # command it never saw, so the exit code and output decide.
@@ -871,21 +997,21 @@ def handle_verify(ctx: Any) -> Any:
 
         # 4. Lint & type-check gate (TENV-3)
         lint_targets: list[str] = []
-        stub_rel = node_stub_rel_path(project, node)
+        stub_rel = adapter.source_rel(project, node)
         if (ws_root / stub_rel).exists():
             lint_targets.append(stub_rel)
-        lint_res = tenv_mgr.run_lint_gate(
-            ws_root,
-            tenv,
-            lint_targets,
-            run_argv=_lint_runner,
-        )
+        lint_res = _run_lint_gate(ctx, project, ws_root, node, adapter, tenv, tenv_mgr, lint_targets, _lint_runner)
     if remote_verify is not None:
         remote_verify.close()
 
     combined_output = test_out
     if lint_res.raw_output:
         combined_output = f"{test_out}\n\n{lint_res.raw_output}".strip()
+
+    # A run that executed no tests is not a pass, whatever the exit code
+    # (`swift test` exits 0 when a filter matches nothing).
+    test_outcome = adapter.parse_result(test_out, rc, "test")
+    no_tests = test_outcome.outcome is Outcome.NO_TESTS
 
     # TENV-6: staleness tracking for ImportError / AttributeError / DeprecationWarning
     for stale_hit in detect_stale_api(combined_output, tenv):
@@ -896,7 +1022,7 @@ def handle_verify(ctx: Any) -> Any:
             data={"stale_api": stale_hit["package"], **stale_hit},
         )
 
-    passed = (rc == 0) and (gate_problem is None) and lint_res.passed
+    passed = (rc == 0) and (gate_problem is None) and lint_res.passed and not no_tests
     last_result = "pass" if passed else "fail"
     now = _utc_now()
     for tr in test_records:
@@ -913,6 +1039,8 @@ def handle_verify(ctx: Any) -> Any:
         failure_parts: list[str] = []
         if rc != 0:
             failure_parts.append(f"Tests exited {rc}:\n{test_out}")
+        elif no_tests:
+            failure_parts.append(f"No tests ran:\n{test_out}")
         if gate_problem is not None:
             failure_parts.append(f"Verification gate failed: {gate_problem}")
         if not lint_res.passed:
@@ -931,7 +1059,7 @@ def handle_verify(ctx: Any) -> Any:
     if node.get("kind") == "integration" and node.get("parent_id"):
         parent = ctx.store.get_node(node["parent_id"])
         if parent is not None and parent.get("parent_id") is None:
-            acc_ok, acc_msg = _run_final_acceptance(ctx, ws_root, tenv, tenv_mgr)
+            acc_ok, acc_msg = _run_final_acceptance(ctx, ws_root, tenv, tenv_mgr, adapter)
             if not acc_ok:
                 ctx.artifact("log", acc_msg, f"final_acceptance_fail_{node['name']}.log")
                 _fail_node(ctx.store, node["id"], acc_msg)
@@ -979,11 +1107,12 @@ def handle_integrate(ctx: Any) -> Any:
     parent = ctx.store.get_node(node["parent_id"]) if node.get("parent_id") else None
     parent_contract = parent.get("contract") if parent else {}
 
+    adapter = _adapter_for(project)
     tenv = parse_target_env(project, ws_root)
-    TargetEnvManager(_exec_target(ctx)).ensure_env(ws_root, tenv)
+    if adapter.needs_target_env():
+        TargetEnvManager(_exec_target(ctx)).ensure_env(ws_root, tenv)
     tools_bundle = build_tools_bundle(ctx.store, project, node, ws_root)
 
-    adapter = _adapter_for(project)
     wiring_rel = adapter.source_rel(project, node)
     policy = _path_policy(writable=(wiring_rel,), readonly=("tests/**", ".nai/**"))
 
@@ -996,7 +1125,7 @@ def handle_integrate(ctx: Any) -> Any:
     ]
     task = (
         f"{prompt.text}\n\n"
-        f"{format_env_block(tenv)}\n\n"
+        f"{adapter.environment_block(project, ws_root)}\n\n"
         f"{knowledge.block(adapter.id, 'integrate')}\n\n"
         f"Parent node: `{(parent or {}).get('name', 'root')}`\n"
         f"Writable integration glue path: `{wiring_rel}`\n"
@@ -1043,7 +1172,7 @@ def handle_diagnose(ctx: Any) -> Any:
     node = ctx.node
     ws_root = _workspace_root(ctx)
     parent_contract = _parent_contract(ctx.store, node)
-    tenv = parse_target_env(project, ws_root)
+    adapter = _adapter_for(project)
 
     input_ref = ctx.job.get("input_ref") or {}
     escalated_pass = bool(input_ref.get("escalated_pass", False))
@@ -1083,7 +1212,7 @@ def handle_diagnose(ctx: Any) -> Any:
         {
             "role": "user",
             "content": (
-                f"{format_env_block(tenv)}\n\n"
+                f"{adapter.environment_block(project, ws_root)}\n\n"
                 f"Diagnose this failure:\n```json\n{json.dumps(payload, indent=2, sort_keys=True)}\n```"
             ),
         },
@@ -1157,8 +1286,8 @@ def handle_review(ctx: Any) -> Any:
     project = ctx.project
     node = ctx.node
     ws_root = _workspace_root(ctx)
-    tenv = parse_target_env(project, ws_root)
-    stub_rel = node_stub_rel_path(project, node)
+    adapter = _adapter_for(project)
+    stub_rel = adapter.source_rel(project, node)
     impl_code = (ws_root / stub_rel).read_text(encoding="utf-8") if (ws_root / stub_rel).is_file() else ""
 
     prompt = get_prompt("review")
@@ -1170,7 +1299,7 @@ def handle_review(ctx: Any) -> Any:
     }
     messages = [
         {"role": "system", "content": prompt.text},
-        {"role": "user", "content": f"{format_env_block(tenv)}\n\n```json\n{json.dumps(payload, indent=2)}\n```"},
+        {"role": "user", "content": f"{adapter.environment_block(project, ws_root)}\n\n```json\n{json.dumps(payload, indent=2)}\n```"},
     ]
 
     try:

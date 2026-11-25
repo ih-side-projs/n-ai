@@ -134,17 +134,20 @@ def test_probe_uses_fallbacks_and_reports_versions():
 def test_nai_languages_reports_supported_list_and_probes(capsys):
     from nai.langs_cli import languages_main
 
-    assert languages_main(["--json"]) == 0
+    rc = languages_main(["--json"])
     payload = json.loads(capsys.readouterr().out)
     assert payload["supported"] == support.supported_languages()
     assert payload["registered"] == registry.supported()
-    assert payload["ok"] is True
-    entry = payload["languages"][0]
+    # The exit code reflects whether every declared toolchain is installed on
+    # this host; CI installs each language's tools in its own job.
+    assert rc == (0 if payload["ok"] else 1)
+    entry = next(item for item in payload["languages"] if item["language"] == "python")
     assert entry["status"]["supported"] is True
     assert entry["probes"]["local"]["ok"] is True
 
-    assert languages_main([]) == 0
+    human_rc = languages_main([])
     human = capsys.readouterr().out
+    assert human_rc == (0 if payload["ok"] else 1)
     assert "supported languages:" in human
     assert "python" in human
 
@@ -152,9 +155,11 @@ def test_nai_languages_reports_supported_list_and_probes(capsys):
 def test_nai_languages_probes_named_workers(capsys, tmp_path: Path):
     from nai.langs_cli import languages_main
 
-    assert languages_main(["--json", "--worker", f"edge={tmp_path}"]) == 0
+    rc = languages_main(["--json", "--worker", f"edge={tmp_path}"])
     payload = json.loads(capsys.readouterr().out)
-    assert "edge" in payload["languages"][0]["probes"]
+    assert rc == (0 if payload["ok"] else 1)
+    entry = next(item for item in payload["languages"] if item["language"] == "python")
+    assert "edge" in entry["probes"]
 
 
 def test_nai_languages_rejects_malformed_workers(capsys):

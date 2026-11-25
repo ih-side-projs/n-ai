@@ -117,7 +117,8 @@
       "default": "python",
       "description": "Project language id (one per project); generated from the adapter registry",
       "enum": [
-        "python"
+        "python",
+        "swift"
       ],
       "type": "string"
     },

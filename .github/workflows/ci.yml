@@ -58,6 +58,42 @@ jobs:
           python -m nai.spec.schemas
           git diff --exit-code nai/spec/schemas/
 
+  swift:
+    name: Swift adapter (real toolchain)
+    runs-on: ubuntu-latest
+    # The Swift adapter's e2e test needs a real toolchain; this job installs one.
+    # Everywhere else the Swift tests either skip (e2e) or use a fake SwiftPM
+    # runner (tests/build/test_swift_pipeline.py), so the main matrix stays green.
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Swift
+        uses: swift-actions/setup-swift@v2
+        with:
+          swift-version: '6.0'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[dev,web,eval]'
+
+      - name: Swift adapter unit tests
+        run: pytest -q tests/langs/test_swift_adapter.py --tb=short
+
+      - name: Swift handler wiring (fake SwiftPM)
+        run: pytest -q tests/build/test_swift_pipeline.py --tb=short
+
+      - name: Swift pipeline end-to-end (stub LLM)
+        run: pytest -q tests/e2e/test_pipeline_swift.py --tb=short
+
+      - name: Swift toolchain probe
+        run: nai languages --json
+
   wheel:
     name: Wheel smoke test
     runs-on: ubuntu-latest

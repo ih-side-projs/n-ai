@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 
 
@@ -44,9 +45,15 @@ def _id_in_test_name(req_id: str, func_name: str) -> bool:
 def check_traceability(
     requirements: list[dict],
     test_sources: dict[str, str],
+    extractor: Callable[[dict[str, str]], tuple[list[str], list[str]]] | None = None,
 ) -> TraceabilityResult:
-    """Verify every testable requirement id appears in at least one test function name (BLD-4)."""
-    funcs, syntax_errors = extract_test_functions(test_sources)
+    """Verify every testable requirement id appears in at least one test function name (BLD-4).
+
+    *extractor* lets the language adapter decide what a test function looks like
+    (Python uses ``ast``, Swift matches ``func test...``); it defaults to the
+    Python parser.
+    """
+    funcs, syntax_errors = (extractor or extract_test_functions)(test_sources)
     covered: dict[str, list[str]] = {}
     missing: list[str] = []
 

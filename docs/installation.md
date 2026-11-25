@@ -100,6 +100,16 @@ package, run `nai-worker init --name macbook --server URL --token TOKEN`, check
 with `nai-worker doctor`, then `nai-worker run` (or load
 `deploy/nai-worker.plist`). See [Remote workers](subsystems/remote-workers.md).
 
+## Optional: Swift toolchain
+
+Swift projects build with SwiftPM and XCTest. Install a Swift 6 toolchain
+(`swift`, `swiftc`; `xcodebuild` on macOS) and run `nai languages` to confirm the
+probe: `python` is required on every host, `swift` only for Swift projects. On
+Linux the official toolchain from swift.org works; on macOS the Xcode command
+line tools provide it. `swiftc -parse` is used as a syntax pre-check when it is
+present, and `xcodebuild-test` (owner-supplied Xcode project) needs macOS. See
+[Language adapters](subsystems/languages.md).
+
 ## Development install for docs
 
 Documentation is plain Markdown; to preview it with MkDocs:

@@ -98,6 +98,9 @@ parameters:
 | `lint` | `targets` (relpaths) | `python` |
 | `verify` | `targets` (relpaths), `args` (tokens) | `python` |
 | `integrate` | `targets` (relpaths) | `python` |
+| `swift-build` | — | `swift` |
+| `swift-test` | `filter` (token) | `swift` |
+| `xcodebuild-test` | `xcode_project` (relpath), `scheme` (token), `destination` (choice) | `swift`, `macos` |
 
 Parameter kinds are `token` (argv-safe characters only), `relpath` (relative,
 no `..`), `relpaths`/`tokens` (lists spliced as separate arguments), `int` and

@@ -123,6 +123,27 @@ requirements on top of the recipe's own (for example a specific toolchain), and
 `worker_wait_seconds` bounds how long a job waits for a capable worker before it
 is requeued without counting an attempt.
 
+### Swift settings
+
+`settings.swift` configures the Swift adapter's owner-supplied Xcode project.
+The project itself is never generated: it lives under `external/`, is excluded
+from the coder's writable globs and is included in worker snapshots.
+
+```json
+{
+  "swift": {
+    "xcode_project": "TinyLibrary.xcodeproj",
+    "xcode_scheme": "TinyLibrary",
+    "xcode_destination": "platform=macOS"
+  }
+}
+```
+
+`xcode_project` is normalised to `external/<value>` (absolute paths and `..` are
+ignored). `xcode_destination` must be one of the recipe's allowlisted
+destinations; an unknown value falls back to `platform=macOS`. Without an Xcode
+project the macOS verification uses `swift test`.
+
 ## Structured-output method (D9)
 
 `nai.spec.structured.call_structured_json()` tries, in order:

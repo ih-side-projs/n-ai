@@ -1,0 +1,24 @@
+{
+  "language": "swift",
+  "name": "Tiny Library",
+  "brief": "# Tiny Library\n\nBuild a two-component Swift package:\n\n- `text-normalizer` provides `normalizeText(_:) -> String`.\n- `word-counter` provides `countWords(_:) -> Int`.\n- Integration scenario S1: normalize text, then count its words.\n",
+  "settings": {
+    "language": "swift",
+    "package_name": "TinyLibrary",
+    "swift": {
+      "xcode_destination": "platform=macOS"
+    }
+  },
+  "e2e_test": "tests/e2e/test_pipeline_swift.py",
+  "expected": {
+    "modules": ["text-normalizer", "word-counter"],
+    "source_files": [
+      "Sources/TextNormalizer/TextNormalizer.swift",
+      "Sources/WordCounter/WordCounter.swift"
+    ],
+    "test_files": [
+      "Tests/TextNormalizerTests/TextNormalizerTests.swift",
+      "Tests/WordCounterTests/WordCounterTests.swift"
+    ]
+  }
+}

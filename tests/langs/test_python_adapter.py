@@ -48,7 +48,7 @@ def adapter() -> PythonAdapter:
 
 
 def test_registry_has_python_by_default():
-    assert registry.supported() == ["python"]
+    assert registry.supported() == ["python", "swift"]
     assert registry.get("python").id == "python"
     assert registry.get(None).id == "python"
     assert registry.get("PYTHON").id == "python"

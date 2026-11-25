@@ -76,9 +76,38 @@ An adapter supplies:
 - **stubs** — `render_stub`, `validate_stub`, `extract_signatures`
 - **commands** — `setup_commands`, `build_commands`, `test_command`,
   `lint_command`, `env_overrides` (argv lists, never shell strings)
+- **environment** — `needs_target_env`, `prepare_workspace` (regenerate files the
+  adapter owns), `environment_block` (the TENV-4 header), `extract_test_functions`
+  (traceability), `platform_lint` (platform-restricted imports)
+- **remote** — `remote_recipe`, `remote_params` (which worker recipe runs a step)
 - **results** — `parse_result`, `stub_failure_is_valid`
 - **policy** — `protected_globs`, `writable_globs`, `snapshot_ignore`,
   `cache_dirs`
+
+## Swift
+
+`nai/langs/swift.py` targets Swift 6 with a SwiftPM 5.9 manifest:
+
+| Piece | Rule |
+|-------|------|
+| layout | `Sources/<Target>/<Target>.swift`, `Tests/<Target>Tests/<Target>Tests.swift`, shared entities in `Sources/<Package>Core/Entities.swift` |
+| `Package.swift` | **adapter-owned**: `prepare_workspace` regenerates it deterministically from the component map and the targets that exist on disk; the coder cannot edit it |
+| stub | `public func … { fatalError("not implemented") }`; integration nodes expose `public func integrate() -> Int` |
+| tests | XCTest, `func test_<REQ-ID>_<behaviour>()`, `@testable import <Target>` |
+| results | `error:` lines → `BUILD_ERROR`; `Fatal error: not implemented` with a non-zero exit → a valid stub failure; `Executed 0 tests` → `NO_TESTS` |
+| syntax | `swiftc -parse` when `swiftc` is installed, otherwise no pre-check |
+| platform lint | a component whose platform is `any` or `linux` may not import SwiftUI, UIKit or AppKit |
+| Xcode | never generated: the owner supplies a project under `external/`, referenced by `project.settings.swift.xcode_project` and included in snapshots |
+
+Remote recipes: `swift-build` and `swift-test` on any host with Swift;
+`xcodebuild-test` on macOS with `xcode_project`, `scheme` and a `destination`
+from an allowlist. The adapter chooses between them (`remote_recipe`), so a
+portable host never tries to run `xcodebuild`.
+
+The `tests/langs/fixtures/swift/` samples are **hand-captured** Swift 6.0 /
+Xcode 16 output (see their README); the real-toolchain coverage is
+`tests/e2e/test_pipeline_swift.py`, which skips without `swift`.
+
 
 ## Knowledge packs
 
