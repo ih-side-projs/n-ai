@@ -22,6 +22,7 @@ pytest -q
 | `tests/spec/` | Checkers, schemas, structured-output fallbacks, scenario step fields |
 | `tests/build/` | Context packs, stubs, tenv, traceability, escalation, failure ladder |
 | `tests/tools/` | Registry, sandbox, data-files and project-introspection tools |
+| `tests/exec/` | Execution targets: env scrubbing, phases, limits, streaming, cancellation (fake docker daemon) |
 | `tests/web/` | Dashboard v1 and v2 (TestClient + httpx ASGITransport) |
 | `tests/e2e/` | Full CLI and web workflows against the real store, runner, command processor and stub LLM |
 | `tests/test_end_to_end.py` | In-process brief → spec → build → done pipeline |
@@ -29,6 +30,11 @@ pytest -q
 
 Each directory has its own `conftest.py` with fixtures and environment isolation,
 so test order does not leak configuration between subsystems.
+
+Run the suite from an activated virtualenv (or with `.venv/bin` on `PATH`):
+scenario tests invoke `python` by name through the execution target, so a bare
+`.venv/bin/python -m pytest` without the venv on `PATH` fails those steps with
+`python: command not found`.
 
 ## Useful invocations
 

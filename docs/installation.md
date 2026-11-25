@@ -81,8 +81,13 @@ nai run --plugin nai.build ...        # commands from job context
 python devswarm.py SPEC.md --docker python:3.12
 ```
 
-Docker mode is exercised in tests through a fake `docker` executable; no daemon
-is required for development.
+Docker mode is hardened: commands run in a named container with `--network none`
+(run phase), memory/CPU/process caps, `--cap-drop ALL`,
+`--security-opt no-new-privileges` and a non-root user; setup installs run in a
+separate one-shot container with network access. See
+[Command execution](subsystems/execution.md). Tests drive Docker mode through a
+fake `docker` executable, so no daemon is required for development; a single
+real-daemon round-trip test skips when `docker` is unavailable.
 
 ## Development install for docs
 

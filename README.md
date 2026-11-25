@@ -54,6 +54,7 @@ and requirement IDs (CORE-1, STO-3, SCH-7, SPEC-3, ...).
 | **SS-WEB** | Local FastAPI dashboard: project tree, approvals, editing, controls, logs (SSE), metrics, tools |
 | **SS-EVAL** | Benchmark suites, scripted stub model server, `nai bench`, JSON/Markdown reports |
 | **SS-LANGS** | Language adapters: layout, stubs, commands, result parsing and path policy behind one protocol |
+| **SS-EXEC** | One execution seam for every command: scrubbed environment, setup/run network phases, resource limits, capped streaming output, real cancellation (local or Docker) |
 | **Service** | Thin supervisor for web + runner + on-demand `nai` instances, with a CLI and local control socket |
 
 ## Architecture
@@ -66,7 +67,8 @@ Brief → SS-SPEC (approved tree of contracts)
       → SS-TOOLS (available to jobs via allowlists)
       → SS-EVAL (measures safe unit sizes and regressions)
 
-SS-SCHED runs every model job; SS-CORE supplies the shared client and workspace.
+SS-SCHED runs every model job; SS-CORE supplies the shared client and workspace;
+SS-EXEC runs every child process, local or in Docker.
 ```
 
 Control principle: Python decides *which* file, *which* job and *whether* tests

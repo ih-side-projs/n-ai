@@ -127,6 +127,25 @@ report = generate_report(results, "default", "qwen", "q4", "builtin")
 write_report(report, Path("reports"))
 ```
 
+## Execution (`nai.exec`)
+
+```python
+from nai.exec import ExecutionTarget, LocalTarget, DockerTarget, make_target
+from nai.exec import Capabilities, RunResult, scrub_env, shell_argv
+
+target = make_target(root, docker_image=None)   # None selects LocalTarget
+result = target.run(["python", "-m", "pytest", "-q"], timeout=300)
+if not result.ok:
+    print(result.exit_code, result.output)
+target.close()
+```
+
+`run()` accepts `cwd`, `env_overrides`, `timeout`, `cancel_event`, `output_cap`,
+`phase` and `network`. `capabilities()` and `describe()` report what the target
+can enforce; `close()` releases containers. New code that spawns a process must
+go through a target rather than `subprocess`. See
+[Command execution](subsystems/execution.md).
+
 ## Requirement IDs
 
 Requirement IDs (`CORE-2`, `STO-3`, `SCH-7`, `SPEC-3`, `BLD-1`, `TLS-1`,

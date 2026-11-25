@@ -13,6 +13,7 @@ Each subsystem corresponds to a work package in the overall specification.
 | SS-WEB | `nai/web/` | [web.md](web.md) |
 | SS-EVAL | `nai/eval/` | [evaluation.md](evaluation.md) |
 | SS-LANGS | `nai/langs/` | [languages.md](languages.md) |
+| SS-EXEC | `nai/exec/` | [execution.md](execution.md) |
 
 ## Dependency direction
 
@@ -21,12 +22,15 @@ core → store → sched → spec → build
                     ↘ tools ↗
                        web (read-only store + command queue)
                        eval (stub server + harness)
+exec  ← every subsystem that runs a command
 ```
 
 `core` has no dependency on the other subsystems. `store` uses only the standard
 library. `sched` depends on `core` and `store`. `spec` and `build` register job
 handlers as scheduler plugins. `tools` is used by jobs through allowlists. `web`
-and `eval` sit on top.
+and `eval` sit on top. `exec` is a leaf: it imports nothing from the other
+subsystems, and `build`, `eval`, `langs`, `sched`, `workspace` and the CLI route
+their commands through it.
 
 ## Shared rules
 

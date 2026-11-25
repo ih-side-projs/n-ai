@@ -33,6 +33,10 @@
                        ┌───────────────────────────┐
                        │ SS-EVAL (benchmarks)      │
                        └───────────────────────────┘
+
+                       ┌───────────────────────────┐
+                       │ SS-EXEC (local / docker)  │
+                       └───────────────────────────┘
 ```
 
 ## Control principle
@@ -85,6 +89,11 @@ interactive shell for submitting new `nai` instances. See [Service](service.md).
 - **X9 Size limits**: configured, not hard-coded; EVAL-4 tunes them.
 - **X10 Prompts**: versioned text files under `nai/spec/prompts/` and
   `nai/build/prompts/`, recorded on each job.
+- **Single execution seam**: every child process goes through `nai/exec`
+  (`LocalTarget` or `DockerTarget`), which scrubs the environment, separates
+  setup (network allowed) from run (network off), applies resource limits,
+  streams capped output and makes cancellation real. See
+  [Command execution](subsystems/execution.md).
 
 ## Store ownership
 

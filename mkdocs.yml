@@ -50,6 +50,8 @@ nav:
       - Tools: subsystems/tools.md
       - Web: subsystems/web.md
       - Evaluation: subsystems/evaluation.md
+      - Languages: subsystems/languages.md
+      - Execution: subsystems/execution.md
   - Reference:
       - Overall specification: specification.md
       - Troubleshooting: troubleshooting.md

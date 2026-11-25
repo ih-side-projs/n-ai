@@ -118,7 +118,7 @@ Key options:
 | `--base-url`, `--api-key` | Local model server |
 | `--reasoner`, `--coder` | Model id overrides |
 | `--ctx`, `--coder-ctx`, `--max-tokens` | Context/token overrides |
-| `--docker IMAGE` | Run commands in a persistent container |
+| `--docker IMAGE` | Run commands in a persistent, hardened container |
 | `--coder-bash` | Give the coder the `run_command` tool |
 | `--test-cmd CMD` | Required verification command (repeatable) |
 | `--no-gate`, `--resume` | Disable verification / resume saved state |
