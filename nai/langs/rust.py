@@ -241,7 +241,7 @@ class RustAdapter:
     id = "rust"
     display_name = "Rust"
     test_framework = "libtest (cargo test)"
-    extensions = (".rs",)
+    extensions: tuple[str, ...] = (".rs",)
     stub_marker = STUB_MARKER
     stack_hint = "Rust 1.75 (edition 2021)"
     style_guide = (
@@ -250,7 +250,7 @@ class RustAdapter:
         "- Name tests `test_<req_id>_<behaviour>` so traceability can find them.\n"
         "- Run `cargo fmt`; the adapter owns every `Cargo.toml`."
     )
-    toolchain = (
+    toolchain: tuple[ToolCheck, ...] = (
         ToolCheck("cargo", ("cargo", "--version")),
         ToolCheck("rustc", ("rustc", "--version")),
         ToolCheck("rustfmt", ("rustfmt", "--version"), required=False),

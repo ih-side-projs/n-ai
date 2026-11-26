@@ -39,6 +39,14 @@ jobs:
           python -m pip install ruff
           ruff check nai tests
 
+      - name: Type check (mypy on adapters and remote workers)
+        run: |
+          python -m pip install mypy
+          mypy nai/langs nai/remote nai/doctor.py nai/gitcp.py nai/paths.py
+
+      - name: Operability self-check (offline)
+        run: python -m nai doctor --offline
+
       - name: Test suite
         run: pytest -q
 
@@ -315,3 +323,9 @@ jobs:
               s = Store(Path(d) / 't.sqlite3'); s.close()
           print('wheel smoke test OK')
           PY
+
+      - name: Operability self-check from the installed wheel
+        run: |
+          cd /tmp
+          /tmp/nai-wheel-venv/bin/python -m nai doctor --offline
+          /tmp/nai-wheel-venv/bin/python -m nai languages --no-probe

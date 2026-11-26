@@ -134,11 +134,56 @@ Console scripts after installation:
 | `nai where PROJECT` | show a project's stable slug, output root and manifest status |
 | `nai relocate PROJECT DIR` | verify the manifest and move a project to a new output root |
 | `nai project create NAME` | create a Store-backed project (`--output-dir`, `--brief`, `--language`, `--json`) |
-| `nai languages` | supported languages plus toolchain probes on this machine and named workers |
-| `nai doctor` / `nai --doctor` | offline integration self-check (imports, planners, handlers, schemas, assets) |
+| `nai languages` | supported languages plus toolchain probes on this machine, a Docker image and named workers |
+| `nai doctor` / `nai --doctor` | operability self-check: DB + migrations, model server, output root, per-language toolchains, package data (`--offline`, `--strict`, `--worker NAME=PATH`) |
 | `python devswarm.py SPEC.md` | original v1 entry point |
 
 Detailed flags: [CLI reference](docs/cli-reference.md).
+
+## Project layout
+
+State lives in one SQLite store; generated code lives in one directory per
+project, so a project can be moved or archived without the store.
+
+```
+.nai/nai.sqlite3                  # store: projects, nodes, jobs, events, artifacts
+outputs/<slug>/                   # default output root (next to .nai/)
+  .nai-project                    # marker: format, version, project_id, slug
+  src/ tests/ ...                 # language-specific layout (see Languages)
+  .git/                           # job-tagged checkpoints
+```
+
+Precedence for the output root is `--output-dir` > `NAI_OUTPUT_ROOT` > project
+`settings.output_root` > `<state-dir>/../outputs`. `nai where PROJECT` prints the
+resolved root and `nai relocate PROJECT DIR` moves a project after verifying its
+marker. Per-language layouts are in [Language adapters](docs/subsystems/languages.md);
+the C/C++ adapters also generate `CMakeLists.txt` and vendor their test harnesses.
+
+## Languages
+
+Seven adapters ship today, and the list is derived from the registry rather than
+hard-coded (`nai languages` prints it with toolchain versions):
+
+| id | Stack | Tests | Stub |
+|----|-------|-------|------|
+| `python` | Python 3.12 | pytest | `raise NotImplementedError` |
+| `swift` | Swift 6 / SwiftPM | XCTest | `fatalError("not implemented")` |
+| `typescript` | Node 20 / TypeScript 5 | vitest | `throw new Error("not implemented")` |
+| `go` | Go 1.22 | `go test -json` | `panic("not implemented")` |
+| `rust` | Rust 1.75 / Cargo | libtest | `unimplemented!()` |
+| `c` | C11 / CMake + CTest | vendored `nai_assert.h` | `NOT_IMPLEMENTED(...)` |
+| `cpp` | C++17 / CMake + CTest | doctest | `std::logic_error("not implemented")` |
+
+`project.settings.language` holds the adapter id (one language per project).
+Contract components may declare `platform: any | linux | macos` (default `any`);
+an `any`/`linux` component may not consume a `macos` component, and portable
+components are linted for UI frameworks and Apple-only imports. A `macos`
+component builds on a worker instead of the orchestrator.
+
+Toolchains are probed, not assumed: `nai languages` shows `registered` vs
+`buildable here`, `nai languages --worker mac=~/w` probes a worker root,
+`NAI_DOCKER_IMAGE` moves execution into a container, and `nai doctor` summarises
+which languages are ready (a missing toolchain is a warning unless `--strict`).
 
 ## Configuration
 
@@ -182,6 +227,40 @@ Environment: `LLAMA_SWAP_URL`, `LLAMA_SWAP_KEY`, `REASONER_MODEL`,
 
 Full reference: [Configuration](docs/configuration.md).
 
+## Remote workers
+
+Build, test and integration steps can run on another machine (a Mac for `macos`
+components, or a beefier box) while the orchestrator stays on Linux. The worker
+is pull-based: it long-polls the orchestrator, executes only the recipes named in
+its own `worker.toml` (argv arrays, never a shell), and reports results back.
+
+```bash
+# orchestrator: create a token (printed once; only its sha256 is stored)
+nai worker add macbook
+nai remote serve --host 127.0.0.1 --port 8765      # loopback by default
+
+# worker machine
+nai-worker init --name macbook --server http://orchestrator:8765 --token ...
+nai-worker doctor
+nai-worker run
+```
+
+Every worker call is authenticated with that bearer token, so the transport must
+be private. Recommended, in order:
+
+1. **Tailscale / WireGuard** — bind the orchestrator to its tailnet address
+   (`--host 100.x.y.z`) and reach it by tailnet name; nothing is exposed to the
+   LAN or the internet.
+2. **SSH tunnel** — keep the default loopback bind and forward the port from the
+   worker: `ssh -N -L 8765:127.0.0.1:8765 orchestrator`.
+3. **Plain LAN as a last resort** — a non-loopback bind without TLS is refused
+   unless `--insecure-lan` is passed; treat that as a temporary, trusted-network
+   only mode.
+
+Snapshots are content-addressed tarballs under `.nai/snapshots` (the last N are
+kept) and extraction rejects absolute paths, `..`, links and devices. See
+[Remote workers](docs/subsystems/remote-workers.md).
+
 ## Testing
 
 The repository ships the integrated test suites of every work package. Tests use
@@ -218,8 +297,35 @@ setup, test expectations and the pull-request process, and the
 ## Security
 
 This project is local-first and must not make outbound calls except to the
-configured local model server. Please report vulnerabilities privately as
-described in [SECURITY.md](SECURITY.md).
+configured local model server and to workers you configure.
+
+Security model, in short:
+
+- **One execution seam.** Every command goes through `nai.exec` as an argv list:
+  there is no `shell=True`, no `bash -lc`, and a model-supplied string is never
+  interpolated into a shell. The environment is scrubbed to an allowlist (and of
+  `*_KEY`/`*_TOKEN` secrets), output is capped, timeouts are enforced and
+  cancellation kills the process group.
+- **Two network phases.** `setup` (dependency installation) may reach the
+  network; `run` (builds and tests) may not — on Linux the run phase gets a
+  private network namespace, and when `unshare` is unavailable the weaker mode is
+  recorded in the event log and reported by `nai doctor`.
+- **Path policy.** File tools are limited to a per-job writable set minus frozen
+  globs (`tests/**`). Adapter-owned manifests (`Package.swift`, `Cargo.toml`,
+  `CMakeLists.txt`, `package.json`, `go.mod`) are regenerated, not edited, and
+  read-only hashes catch shell-side edits of frozen tests.
+- **No implicit trust in models.** Structured output is schema-validated with a
+  bounded number of repairs; the supported-language list, a project's language
+  and the recipes a worker may run are chosen by the operator, never the model.
+- **Worker API.** Bearer tokens (printed once, stored as sha256, compared in
+  constant time), loopback bind by default, TLS or an explicit `--insecure-lan`
+  opt-in for any other interface, allowlisted recipe parameters validated on both
+  sides, and snapshots that cannot escape the work directory.
+- **Secrets.** Model keys come from the environment or `nai.toml` and are not
+  written to the store; artifacts and events record prompts, replies and
+  diagnostics, not credentials.
+
+Please report vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
 
 ## License
 

@@ -401,8 +401,10 @@ class WorkerAgent:
     def execute_task(self, task: dict[str, Any]) -> dict[str, Any] | None:
         """Run one claimed task; returns the result payload or None when cancelled."""
         recipe = self.config.recipe(str(task.get("recipe") or ""))
-        blob = task.get("params") if isinstance(task.get("params"), dict) else {}
-        params = blob.get("params") if isinstance(blob.get("params"), dict) else {}
+        raw_params = task.get("params")
+        blob: dict[str, Any] = raw_params if isinstance(raw_params, dict) else {}
+        raw_nested = blob.get("params")
+        params: dict[str, Any] = raw_nested if isinstance(raw_nested, dict) else {}
         cache_dirs = blob.get("cache_dirs") or self.config.cache_dirs
         sha = str(task.get("snapshot_sha") or "")
         archive = self.config.work_dir / "downloads" / f"{sha}.tar.gz"

@@ -152,7 +152,7 @@ syntax pre-check instead and relies on verify feedback from the worker.
 ```bash
 # orchestrator
 nai worker add macbook --capabilities macos,python   # token shown once
-nai remote serve --host 0.0.0.0 --port 8765 --insecure-lan
+nai remote serve --host 127.0.0.1 --port 8765        # loopback by default
 
 # macOS
 nai-worker init --name macbook --server http://<orchestrator>:8765 --token <token>
@@ -163,6 +163,25 @@ nai-worker run
 `deploy/nai-worker.plist` is a launchd user agent. SIGTERM stops claiming and
 kills the running process group; the task's lease then expires and it is
 requeued.
+
+### Transport: keep it private
+
+The bearer token authenticates every worker call, but it travels in plain HTTP,
+so the link between worker and orchestrator must already be private. Pick one:
+
+| Option | How | Notes |
+|--------|-----|-------|
+| **Tailscale / WireGuard** (recommended) | `nai remote serve --host 100.x.y.z`; use the tailnet name in `worker.toml` | No LAN or internet exposure; ACLs decide which machines can reach the port |
+| **SSH tunnel** | Keep `127.0.0.1` and run `ssh -N -L 8765:127.0.0.1:8765 orchestrator` on the worker; point `server` at `http://127.0.0.1:8765` | Works with the default bind; needs an SSH account on the orchestrator |
+| **TLS** | `nai remote serve --host 0.0.0.0 --certfile cert.pem --keyfile key.pem` | For an existing PKI; the certificate must cover the name the worker uses |
+| **Plain LAN** (last resort) | `--host 0.0.0.0 --insecure-lan` | Explicit opt-in, no encryption; only on a trusted, isolated network |
+
+A non-loopback bind without TLS is refused before uvicorn starts unless
+`--insecure-lan` is given, so a typo cannot silently expose the worker API. The
+same rule applies to the dashboard (`nai-web`).
+
+Verify the chain with `nai-worker doctor` (health + heartbeat) and
+`nai doctor --worker mac=~/w` (language toolchains on the worker root).
 
 ## Failure handling
 

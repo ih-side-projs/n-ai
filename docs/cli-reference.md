@@ -10,28 +10,36 @@
 | `nai-web` | `nai.web.server:main` | local FastAPI dashboard |
 | `nai-bench` | `nai.eval.cli:bench_main` | benchmark runner |
 | `nai-service` | `nai.service.cli:service_main` | service supervisor control CLI |
-| `nai-doctor` | `nai.doctor:main` | offline integration self-check |
+| `nai-doctor` | `nai.doctor:main` | operability self-check (DB, models, output root, toolchains, assets) |
 | `nai-worker` | `nai.remote.worker:worker_main` | remote build/test worker (`init\|run\|doctor`) |
 
 Subcommands are registered through `nai.cli.register_subcommand()`; `python -m nai`
 uses the same dispatcher as the `nai` script. `python devswarm.py` is the original
 v1 entry point.
 
-## `nai doctor` — integration self-check
+## `nai doctor` — operability self-check
 
 ```bash
-nai doctor
-nai doctor --json
-nai --doctor
+nai doctor                     # probe local toolchains and the model server
+nai doctor --offline           # skip the model-server probe (no network)
+nai doctor --strict            # warnings (models, toolchains) fail the run
+nai doctor --worker mac=~/w    # also probe a worker root's toolchains
+nai doctor --json              # machine-readable, includes "warning"
+nai --doctor                   # v1-flag spelling
 python -m nai.doctor
 ```
 
-Runs offline (no model server required) and checks subsystem imports, CLI
-subcommand registration, job-handler/planner coverage against the real
-`PlanContext`, artifact kinds, schema artifacts, package data, a temporary
-SQLite store migration, and the tool registry. Exits non-zero when a check
-fails. Run this first when subsystems pass their own tests but integration
-behaves unexpectedly.
+Checks subsystem imports, CLI subcommand registration, job-handler/planner
+coverage against the real `PlanContext`, artifact kinds, schema artifacts,
+package data (migrations, prompts, templates, knowledge packs and the vendored
+C/C++ headers), a temporary SQLite store migration, the configured database file
+(`NAI_DB_PATH`, read-only, applied vs bundled migrations), the resolved output
+root (dangerous-path and writability guards), model-server reachability
+(`GET <base_url>/models`, reporting the reasoner/coder ids) and the per-language
+toolchains here, in `NAI_DOCKER_IMAGE` or on `--worker` roots. Exits non-zero
+when a check fails; `WARN` lines are advisory unless `--strict` is given. Run it
+first when subsystems pass their own tests but integration behaves unexpectedly,
+and as the deployment gate before starting the service.
 
 ## `nai where` / `nai relocate` — project layout
 

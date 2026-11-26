@@ -35,7 +35,7 @@ class PythonAdapter:
     id = "python"
     display_name = "Python"
     test_framework = "pytest"
-    extensions = (".py",)
+    extensions: tuple[str, ...] = (".py",)
     stub_marker = _MARKER
     stack_hint = "Python 3.12"
     style_guide = (
@@ -45,7 +45,7 @@ class PythonAdapter:
     )
     #: Probe only: pytest/ruff are optional because the project venv installs
     #: pinned versions from ``target_env.packages``.
-    toolchain = (
+    toolchain: tuple[ToolCheck, ...] = (
         ToolCheck("python", ("python3", "--version"), fallback=("python", "py")),
         ToolCheck("pytest", ("pytest", "--version"), required=False),
         ToolCheck("ruff", ("ruff", "--version"), required=False),
@@ -72,7 +72,7 @@ class PythonAdapter:
         cleaned = raw_path.replace("\\", "/").lstrip("/")
         parts = [p for p in cleaned.split("/") if p and p != "."]
         if not parts or ".." in parts:
-            return self.test_rel(node)
+            return layout.python_test_rel(node)
         if parts[0] != "tests":
             parts = ["tests", *parts]
         if not parts[-1].endswith(".py"):

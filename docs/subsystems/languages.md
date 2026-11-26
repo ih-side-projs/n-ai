@@ -238,7 +238,26 @@ an unknown value. `handle_check_interfaces` fails deterministically on these
 findings instead of asking the model to fill a gap. Spec prompts require
 platform-specific code to live in leaf components with portable logic around it.
 
-## Adding a language
+## Operability and CI
+
+Toolchains are never assumed to exist:
+
+| Command | What it answers |
+|---------|-----------------|
+| `nai languages` | which languages are registered, supported and buildable **here** |
+| `nai languages --worker mac=~/w` (or `NAI_LANGUAGE_WORKERS=mac=~/w`) | the same, probing a worker root's `.venv/bin`/`bin` first |
+| `NAI_DOCKER_IMAGE=... nai doctor` | whether the container image that will run commands is present |
+| `nai doctor` | one summary line per language; missing required tools are a `WARN` |
+| `nai doctor --strict` | the same, but a missing toolchain fails the run (deployment gate) |
+
+CI runs one job per language that installs the toolchain, runs the adapter unit
+tests, asserts `nai languages --json` reports that toolchain as present (so a
+broken runner image cannot silently skip the e2e test) and then runs the
+pipeline end-to-end test. The `test` job additionally runs `ruff`, `mypy` on
+`nai/langs` and `nai/remote`, and `nai doctor --offline`; the `wheel` job builds
+the wheel, installs it into a clean venv, checks the packaged data (including
+`langs/vendor/*.h`) and runs `nai doctor --offline` from that venv.
+
 
 1. Implement the protocol in `nai/langs/<id>.py`, including `stack_hint` and
    `toolchain`.

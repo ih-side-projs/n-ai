@@ -131,7 +131,10 @@ class RemoteTarget(BaseTarget):
         recorded = tuple(str(part) for part in argv)
         budget = self._clamp_timeout(timeout)
         snapshot = snapshot_tree(
-            self.root, self.snapshot_ignore, dest_dir=self.snapshot_dir, keep=self.keep_snapshots
+            Path(str(self.root)),
+            self.snapshot_ignore,
+            dest_dir=self.snapshot_dir,
+            keep=self.keep_snapshots,
         )
         blob = {"params": self.clean_params, "cache_dirs": list(self.cache_dirs)}
         task = self.store.create_remote_task(

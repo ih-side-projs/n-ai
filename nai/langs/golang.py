@@ -132,7 +132,7 @@ class GoAdapter:
     id = "go"
     display_name = "Go"
     test_framework = "go test"
-    extensions = (".go",)
+    extensions: tuple[str, ...] = (".go",)
     stub_marker = STUB_MARKER
     stack_hint = "Go 1.22"
     style_guide = (
@@ -141,7 +141,7 @@ class GoAdapter:
         "- Name tests `Test_<REQ-ID>_<Behaviour>` so traceability can find them.\n"
         "- Format with `gofmt`; the adapter owns `go.mod` and `internal/entities`."
     )
-    toolchain = (
+    toolchain: tuple[ToolCheck, ...] = (
         ToolCheck("go", ("go", "version")),
         ToolCheck("gofmt", ("gofmt", "-h"), required=False),
     )

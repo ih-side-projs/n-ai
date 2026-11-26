@@ -111,7 +111,7 @@ def get_git_commit() -> str:
             capture_output=True, text=True, cwd=Path(__file__).parent.parent.parent
         )
         return result.stdout.strip()[:8] if result.returncode == 0 else "unknown"
-    except Exception:
+    except (OSError, subprocess.SubprocessError):
         return "unknown"
 
 

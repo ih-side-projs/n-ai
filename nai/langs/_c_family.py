@@ -282,7 +282,7 @@ class CFamilyAdapter:
     test_framework = "CTest"
     extension = ".c"
     header_extension = ".h"
-    extensions = (".c", ".h")
+    extensions: tuple[str, ...] = (".c", ".h")
     stack_hint = "C11"
     standard = "C11"
     #: The bare version CMake wants in ``set(CMAKE_<lang>_STANDARD ...)``.
@@ -292,7 +292,7 @@ class CFamilyAdapter:
     style_guide = ""
     #: ``cc``/``c++`` resolve to gcc or clang on the host; Ninja is preferred but
     #: optional.  Subclasses narrow the compiler probe to their own language.
-    toolchain = (
+    toolchain: tuple[ToolCheck, ...] = (
         ToolCheck("cc", ("cc", "--version"), fallback=("gcc", "clang")),
         ToolCheck("cmake", ("cmake", "--version")),
         ToolCheck("ninja", ("ninja", "--version"), required=False),
@@ -1096,7 +1096,7 @@ class CAdapter(CFamilyAdapter):
         "- Contract stubs call `NOT_IMPLEMENTED(name)`; tests use the vendored `nai_assert.h`.\n"
         "- Do not edit `CMakeLists.txt`, `vendor/`, `include/entities/` or the generated headers."
     )
-    toolchain = (
+    toolchain: tuple[ToolCheck, ...] = (
         ToolCheck("cc", ("cc", "--version"), fallback=("gcc", "clang")),
         ToolCheck("cmake", ("cmake", "--version")),
         ToolCheck("ninja", ("ninja", "--version"), required=False),
@@ -1113,7 +1113,7 @@ class CppAdapter(CFamilyAdapter):
     language = "cpp"
     extension = ".cpp"
     header_extension = ".h"
-    extensions = (".cpp", ".cc", ".cxx", ".h", ".hpp")
+    extensions: tuple[str, ...] = (".cpp", ".cc", ".cxx", ".h", ".hpp")
     stack_hint = "C++17 / CMake 3.21 / CTest / doctest"
     standard = "C++17"
     cmake_standard = "17"
@@ -1127,7 +1127,7 @@ class CppAdapter(CFamilyAdapter):
         "- Contract stubs throw `std::logic_error(\"not implemented\")`; tests use doctest.\n"
         "- Do not edit `CMakeLists.txt`, `vendor/`, `include/entities/` or the generated headers."
     )
-    toolchain = (
+    toolchain: tuple[ToolCheck, ...] = (
         ToolCheck("c++", ("c++", "--version"), fallback=("g++", "clang++")),
         ToolCheck("cmake", ("cmake", "--version")),
         ToolCheck("ninja", ("ninja", "--version"), required=False),

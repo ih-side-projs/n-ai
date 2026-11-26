@@ -110,6 +110,7 @@ def probe(
     adapter = registry.get(language_id)
     worker_root = Path(root).expanduser().resolve() if root else None
     root_path = worker_root or Path.cwd()
+    resolve: Callable[[str], str | None]
     if which is None:
         search_path = _worker_path(worker_root, os.environ.get("PATH", ""))
 

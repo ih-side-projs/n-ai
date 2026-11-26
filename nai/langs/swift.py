@@ -299,7 +299,7 @@ class SwiftAdapter:
     id = "swift"
     display_name = "Swift"
     test_framework = "XCTest"
-    extensions = (".swift",)
+    extensions: tuple[str, ...] = (".swift",)
     stub_marker = STUB_MARKER
     stack_hint = "Swift 6 / SwiftPM"
     style_guide = (
@@ -310,7 +310,7 @@ class SwiftAdapter:
         "- Name XCTest methods `func test_<REQ-ID>_<behaviour>()` so traceability can find them.\n"
         "- Keep `Package.swift` untouched: the adapter owns it and regenerates it from the contract."
     )
-    toolchain = (
+    toolchain: tuple[ToolCheck, ...] = (
         ToolCheck("swift", ("swift", "--version")),
         ToolCheck("swiftc", ("swiftc", "--version"), required=False),
         ToolCheck("xcodebuild", ("xcodebuild", "-version"), required=False),

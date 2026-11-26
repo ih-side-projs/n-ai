@@ -188,7 +188,7 @@ class TypeScriptAdapter:
     id = "typescript"
     display_name = "TypeScript"
     test_framework = "vitest"
-    extensions = (".ts", ".tsx", ".mts", ".cts")
+    extensions: tuple[str, ...] = (".ts", ".tsx", ".mts", ".cts")
     stub_marker = STUB_MARKER
     stack_hint = "Node 20 / TypeScript 5 / vitest"
     style_guide = (
@@ -199,7 +199,7 @@ class TypeScriptAdapter:
         "- Name vitest specs `it(\"R1_<behaviour>\", ...)` so traceability can find the requirement id.\n"
         "- Do not edit `package.json`, `tsconfig.json` or `src/entities.ts`; the adapter owns them."
     )
-    toolchain = (
+    toolchain: tuple[ToolCheck, ...] = (
         ToolCheck("node", ("node", "--version")),
         ToolCheck("npm", ("npm", "--version")),
         ToolCheck("npx", ("npx", "--version"), required=False),
@@ -429,8 +429,9 @@ class TypeScriptAdapter:
         )
         marker = CRASH_MARKER in text
         # ``tsc --noEmit`` reports no tests; only a test run can be NO_TESTS.
+        total = int(payload.get("numTotalTests") or 0) if payload else 0
         zero_tests = kind != "build" and (
-            (bool(payload) and int(payload.get("numTotalTests") or 0) == 0)
+            total == 0
             or (not payload and "No test files found" in text)
             or (not payload and kind == "test")
         )

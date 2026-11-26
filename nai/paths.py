@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -66,13 +67,13 @@ def resolve_output_root(
     explicit: str | Path | None = None,
     *,
     settings: dict[str, Any] | None = None,
-    env: dict[str, str] | None = None,
+    env: Mapping[str, str] | None = None,
     db_path: str | Path | None = None,
 ) -> Path:
     """Resolve precedence: explicit > NAI_OUTPUT_ROOT > settings > default."""
-    env = os.environ if env is None else env
-    settings = settings or {}
-    value = explicit or env.get("NAI_OUTPUT_ROOT") or settings.get("output_root")
+    source: Mapping[str, str] = os.environ if env is None else env
+    values = settings or {}
+    value = explicit or source.get("NAI_OUTPUT_ROOT") or values.get("output_root")
     if value:
         return validate_output_root(value)
     if db_path is None:
