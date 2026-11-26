@@ -1,0 +1,21 @@
+{
+  "language": "rust",
+  "name": "Tiny Library",
+  "brief": "# Tiny Library\n\nBuild a two-component Rust workspace:\n\n- `text-normalizer` provides `normalize_text(text: &str) -> String`.\n- `word-counter` provides `count_words(text: &str) -> i64`.\n- Integration scenario S1: normalize text, then count its words.\n",
+  "settings": {
+    "language": "rust",
+    "package_name": "tiny_library"
+  },
+  "e2e_test": "tests/e2e/test_pipeline_rust.py",
+  "expected": {
+    "modules": ["text-normalizer", "word-counter"],
+    "source_files": [
+      "crates/text_normalizer/src/lib.rs",
+      "crates/word_counter/src/lib.rs"
+    ],
+    "test_files": [
+      "crates/text_normalizer/tests/text_normalizer_test.rs",
+      "crates/word_counter/tests/word_counter_test.rs"
+    ]
+  }
+}

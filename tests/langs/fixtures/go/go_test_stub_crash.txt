@@ -1,0 +1,11 @@
+{"Time":"2024-05-01T10:00:00.000000+00:00","Action":"start","Package":"tiny-library/internal/text_normalizer"}
+{"Time":"2024-05-01T10:00:00.010000+00:00","Action":"run","Package":"tiny-library/internal/text_normalizer","Test":"TestR1NormalizeText"}
+{"Time":"2024-05-01T10:00:00.010000+00:00","Action":"output","Package":"tiny-library/internal/text_normalizer","Test":"TestR1NormalizeText","Output":"=== RUN   TestR1NormalizeText\n"}
+{"Time":"2024-05-01T10:00:00.010000+00:00","Action":"output","Package":"tiny-library/internal/text_normalizer","Test":"TestR1NormalizeText","Output":"panic: not implemented\n"}
+{"Time":"2024-05-01T10:00:00.010000+00:00","Action":"output","Package":"tiny-library/internal/text_normalizer","Test":"TestR1NormalizeText","Output":"\n"}
+{"Time":"2024-05-01T10:00:00.010000+00:00","Action":"output","Package":"tiny-library/internal/text_normalizer","Test":"TestR1NormalizeText","Output":"goroutine 6 [running]:\n"}
+{"Time":"2024-05-01T10:00:00.010000+00:00","Action":"output","Package":"tiny-library/internal/text_normalizer","Test":"TestR1NormalizeText","Output":"tiny-library/internal/text_normalizer.NormalizeText(...)\n"}
+{"Time":"2024-05-01T10:00:00.010000+00:00","Action":"output","Package":"tiny-library/internal/text_normalizer","Test":"TestR1NormalizeText","Output":"\t/home/dev/tiny-library/internal/text_normalizer/text_normalizer.go:5\n"}
+{"Time":"2024-05-01T10:00:00.010000+00:00","Action":"output","Package":"tiny-library/internal/text_normalizer","Test":"TestR1NormalizeText","Output":"--- FAIL: TestR1NormalizeText (0.00s)\n"}
+{"Time":"2024-05-01T10:00:00.010000+00:00","Action":"fail","Package":"tiny-library/internal/text_normalizer","Test":"TestR1NormalizeText","Elapsed":0}
+{"Time":"2024-05-01T10:00:00.020000+00:00","Action":"fail","Package":"tiny-library/internal/text_normalizer","Elapsed":0.004}

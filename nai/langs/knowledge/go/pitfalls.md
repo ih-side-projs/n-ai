@@ -1,0 +1,12 @@
+- `panic("not implemented")` is deliberate in stubs; remove it when implementing.
+- Do not edit `go.mod` or `internal/entities/entities.go`; the adapter regenerates them.
+- `go build`/`go vet` failures are BUILD_ERROR; `go test` failures are TEST_FAIL.
+- Unused imports and unused local variables are compile errors in Go.
+- `:=` declares; `=` assigns. Shadowing in an inner block hides the outer variable.
+- Slices share backing arrays; `append` may or may not copy. Copy when you need isolation.
+- `for range` over a map has randomised order; sort keys before comparing output.
+- `nil` map reads are fine; writes panic. Always `make` before writing.
+- Integer division truncates; use `float64` for fractions.
+- `defer` runs at function return; in a loop it piles up until the loop ends.
+- `time.Now()` is not deterministic; inject a clock in tests.
+- Platform: `any`/`linux` components may not import GUI toolkits (verify fails).

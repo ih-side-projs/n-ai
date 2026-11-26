@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites>
+  <testsuite name="./build/adder_test" errors="0" failures="0" tests="1" time="0" timestamp="2026-11-26T15:20:06Z" doctest_version="2.4.11">
+    <testcase classname="/tmp/cppcap/tests/adder/adder_test.cpp" name="R1_adds_two_numbers" time="0" status="run"/>
+  </testsuite>
+</testsuites>

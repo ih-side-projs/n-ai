@@ -117,8 +117,13 @@
       "default": "python",
       "description": "Project language id (one per project); generated from the adapter registry",
       "enum": [
+        "c",
+        "cpp",
+        "go",
         "python",
-        "swift"
+        "rust",
+        "swift",
+        "typescript"
       ],
       "type": "string"
     },

@@ -485,6 +485,7 @@ class SwiftAdapter:
         run_cmd: Any,
         *,
         executable: str | None = None,
+        run_setup_cmd: Any | None = None,
     ) -> tuple[bool, str]:
         """A stub is valid when the package still builds."""
         rc, out = run_cmd("swift build")

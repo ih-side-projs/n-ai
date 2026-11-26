@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites>
+  <testsuite name="./build/adder_test" errors="0" failures="1" tests="1" time="0.000103" timestamp="2026-11-26T15:20:44Z" doctest_version="2.4.11">
+    <testcase classname="/tmp/cppcap/tests/adder/adder_test.cpp" name="R1_adds_two_numbers" time="0.000103" status="run">
+      <failure message="5 == 6" type="CHECK">
+/tmp/cppcap/tests/adder/adder_test.cpp:5:
+CHECK( adder::add(2, 3) == 6 ) is NOT correct!
+  values: CHECK( 5 == 6 )
+
+      </failure>
+    </testcase>
+  </testsuite>
+</testsuites>

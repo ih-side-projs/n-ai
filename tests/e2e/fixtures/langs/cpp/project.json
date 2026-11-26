@@ -1,0 +1,21 @@
+{
+  "language": "cpp",
+  "name": "Tiny Library",
+  "brief": "# Tiny Library\n\nBuild a two-component C++ library (C++17, CMake + CTest):\n\n- `text-normalizer` provides `std::string normalize_text(const std::string &text)`.\n- `word-counter` provides `int count_words(const std::string &text)`.\n- Integration scenario S1: normalize text, then count its words.\n",
+  "settings": {
+    "language": "cpp",
+    "package_name": "tiny_library"
+  },
+  "e2e_test": "tests/e2e/test_pipeline_cpp.py",
+  "expected": {
+    "modules": ["text-normalizer", "word-counter"],
+    "source_files": [
+      "src/text_normalizer/text_normalizer.cpp",
+      "src/word_counter/word_counter.cpp"
+    ],
+    "test_files": [
+      "tests/text_normalizer/text_normalizer_test.cpp",
+      "tests/word_counter/word_counter_test.cpp"
+    ]
+  }
+}

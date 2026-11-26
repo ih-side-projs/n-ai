@@ -1,0 +1,21 @@
+{
+  "language": "c",
+  "name": "Tiny Library",
+  "brief": "# Tiny Library\n\nBuild a two-component C library (C11, CMake + CTest):\n\n- `text-normalizer` provides `char *text_normalizer_normalize_text(const char *text)`; the caller owns the returned buffer.\n- `word-counter` provides `int word_counter_count_words(const char *text)`.\n- Integration scenario S1: normalize text, then count its words.\n",
+  "settings": {
+    "language": "c",
+    "package_name": "tiny_library"
+  },
+  "e2e_test": "tests/e2e/test_pipeline_c.py",
+  "expected": {
+    "modules": ["text-normalizer", "word-counter"],
+    "source_files": [
+      "src/text_normalizer/text_normalizer.c",
+      "src/word_counter/word_counter.c"
+    ],
+    "test_files": [
+      "tests/text_normalizer/text_normalizer_test.c",
+      "tests/word_counter/word_counter_test.c"
+    ]
+  }
+}

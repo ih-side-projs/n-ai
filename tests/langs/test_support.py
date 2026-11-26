@@ -73,7 +73,7 @@ def test_require_supported_normalises_case_and_whitespace():
     with pytest.raises(registry.UnknownLanguageError):
         support.require_supported("")
     with pytest.raises(registry.UnknownLanguageError):
-        support.require_supported("rust")
+        support.require_supported("cobol")
 
 
 def test_missing_e2e_fixture_marks_the_language_incomplete(tmp_path: Path):
@@ -90,11 +90,14 @@ def test_fixture_is_absent_outside_a_checkout(monkeypatch, tmp_path: Path):
 
 
 def test_unsupported_languages_in_flags_only_unbuildable_languages():
-    assert support.unsupported_languages_in("Build a Rust CLI with TypeScript bindings") == [
-        "Rust",
-        "TypeScript",
-    ]
+    # Rust and TypeScript are supported adapters now, so a brief naming them is
+    # buildable; only genuinely unbuildable languages are flagged.
+    assert support.unsupported_languages_in("Build a Rust CLI with TypeScript bindings") == []
     assert support.unsupported_languages_in("A Python 3.12 library") == []
+    assert support.unsupported_languages_in("A Java service with Kotlin bindings") == [
+        "Java",
+        "Kotlin",
+    ]
     assert support.unsupported_languages_in("Use javascript for the frontend") == ["JavaScript"]
     # Word boundaries: 'trust' and 'gopher' are not languages.
     assert support.unsupported_languages_in("trust the gopher") == []

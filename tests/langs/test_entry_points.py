@@ -47,7 +47,7 @@ def test_store_validates_language_updates(tmp_path: Path):
     with Store(tmp_path / "db.sqlite3") as store:
         project_id = store.create_project("Good", "brief")
         with pytest.raises(StoreError, match="unsupported language"):
-            store.update_project(project_id, settings={"language": "rust"})
+            store.update_project(project_id, settings={"language": "cobol"})
         assert store.get_project(project_id)["settings"]["language"] == "python"
 
         store.update_project(project_id, settings={"language": "Python"})
@@ -177,7 +177,7 @@ def test_import_rejects_a_bundle_with_an_unsupported_language(tmp_path: Path):
 
     manifest_file = bundle / "manifest.json"
     payload = json.loads(manifest_file.read_text(encoding="utf-8"))
-    payload["tables"]["projects"][0]["settings_json"] = json.dumps({"language": "rust"})
+    payload["tables"]["projects"][0]["settings_json"] = json.dumps({"language": "cobol"})
     manifest_file.write_text(json.dumps(payload), encoding="utf-8")
 
     with Store(tmp_path / "target.sqlite3") as target:

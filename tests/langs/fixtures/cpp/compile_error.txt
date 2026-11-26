@@ -1,0 +1,8 @@
+[ 20%] Building CXX object CMakeFiles/adder.dir/src/adder/adder.cpp.o
+/tmp/cppcap/src/adder/adder.cpp: In function ‘int adder::add(int, int)’:
+/tmp/cppcap/src/adder/adder.cpp:6:16: error: ‘missing’ was not declared in this scope
+    6 |     return a + missing;
+      |                ^~~~~~~
+gmake[2]: *** [CMakeFiles/adder.dir/build.make:79: CMakeFiles/adder.dir/src/adder/adder.cpp.o] Error 1
+gmake[1]: *** [CMakeFiles/Makefile2:1014: CMakeFiles/adder.dir/all] Error 2
+gmake: *** [Makefile:101: all] Error 2

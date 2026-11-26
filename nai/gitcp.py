@@ -6,7 +6,12 @@ from pathlib import Path
 
 from .exec import PHASE_RUN, LocalTarget
 
-GITIGNORE = ".agent/\nnode_modules/\n.venv/\nvenv/\n__pycache__/\n*.pyc\n.pytest_cache/\n.nai/\n.nai-project\n"
+GITIGNORE = (
+    ".agent/\nnode_modules/\n.venv/\nvenv/\n__pycache__/\n*.pyc\n.pytest_cache/\n.nai/\n.nai-project\n"
+    # Adapter build caches (`snapshot_ignore`/`cache_dirs`): committing CMake
+    # build trees, Cargo targets or SwiftPM caches would bloat every checkpoint.
+    "build/\ntarget/\ndist/\ncoverage/\n.vite/\n*.tsbuildinfo\n.build/\n.swiftpm/\nDerivedData/\nbin/\n"
+)
 
 
 @dataclass(frozen=True)

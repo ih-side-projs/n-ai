@@ -1,0 +1,21 @@
+{
+  "language": "typescript",
+  "name": "Tiny Library",
+  "brief": "# Tiny Library\n\nBuild a two-component TypeScript library:\n\n- `text-normalizer` provides `normalizeText(text: string): string`.\n- `word-counter` provides `countWords(text: string): number`.\n- Integration scenario S1: normalize text, then count its words.\n",
+  "settings": {
+    "language": "typescript",
+    "package_name": "tiny-lib"
+  },
+  "e2e_test": "tests/e2e/test_pipeline_typescript.py",
+  "expected": {
+    "modules": ["text-normalizer", "word-counter"],
+    "source_files": [
+      "src/text-normalizer/index.ts",
+      "src/word-counter/index.ts"
+    ],
+    "test_files": [
+      "tests/text-normalizer.test.ts",
+      "tests/word-counter.test.ts"
+    ]
+  }
+}

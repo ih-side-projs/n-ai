@@ -94,6 +94,195 @@ jobs:
       - name: Swift toolchain probe
         run: nai languages --json
 
+  typescript:
+    name: TypeScript adapter (real toolchain)
+    runs-on: ubuntu-latest
+    # The e2e test skips without Node/npm; this job installs the pinned Node 20
+    # and then asserts the probe actually found the toolchain, so a broken image
+    # cannot turn the job into a silent skip.
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[dev,web,eval]'
+
+      - name: TypeScript adapter unit tests
+        run: pytest -q tests/langs/test_typescript_adapter.py --tb=short
+
+      - name: Toolchain probe (typescript)
+        run: |
+          nai languages --json > languages.json || true
+          python - <<'PY'
+          import json
+          payload = json.load(open("languages.json"))
+          entry = next(e for e in payload["languages"] if e["language"] == "typescript")
+          assert entry["status"]["supported"] is True, entry["status"]
+          assert entry["probes"]["local"]["ok"] is True, entry["probes"]["local"]
+          PY
+
+      - name: TypeScript pipeline end-to-end (stub LLM)
+        run: pytest -q tests/e2e/test_pipeline_typescript.py --tb=short
+
+  go:
+    name: Go adapter (real toolchain)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[dev,web,eval]'
+
+      - name: Go adapter unit tests
+        run: pytest -q tests/langs/test_golang_adapter.py --tb=short
+
+      - name: Toolchain probe (go)
+        run: |
+          nai languages --json > languages.json || true
+          python - <<'PY'
+          import json
+          payload = json.load(open("languages.json"))
+          entry = next(e for e in payload["languages"] if e["language"] == "go")
+          assert entry["status"]["supported"] is True, entry["status"]
+          assert entry["probes"]["local"]["ok"] is True, entry["probes"]["local"]
+          PY
+
+      - name: Go pipeline end-to-end (stub LLM)
+        run: pytest -q tests/e2e/test_pipeline_go.py --tb=short
+
+  rust:
+    name: Rust adapter (real toolchain)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal --component rustfmt
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[dev,web,eval]'
+
+      - name: Rust adapter unit tests
+        run: pytest -q tests/langs/test_rust_adapter.py --tb=short
+
+      - name: Toolchain probe (rust)
+        run: |
+          nai languages --json > languages.json || true
+          python - <<'PY'
+          import json
+          payload = json.load(open("languages.json"))
+          entry = next(e for e in payload["languages"] if e["language"] == "rust")
+          assert entry["status"]["supported"] is True, entry["status"]
+          assert entry["probes"]["local"]["ok"] is True, entry["probes"]["local"]
+          PY
+
+      - name: Rust pipeline end-to-end (stub LLM)
+        run: pytest -q tests/e2e/test_pipeline_rust.py --tb=short
+
+  c:
+    name: C adapter (real toolchain)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake ninja-build build-essential
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[dev,web,eval]'
+
+      - name: C adapter unit tests
+        run: pytest -q tests/langs/test_c_family_adapter.py --tb=short
+
+      - name: Toolchain probe (c)
+        run: |
+          nai languages --json > languages.json || true
+          python - <<'PY'
+          import json
+          payload = json.load(open("languages.json"))
+          entry = next(e for e in payload["languages"] if e["language"] == "c")
+          assert entry["status"]["supported"] is True, entry["status"]
+          assert entry["probes"]["local"]["ok"] is True, entry["probes"]["local"]
+          PY
+
+      - name: C pipeline end-to-end (stub LLM)
+        run: pytest -q tests/e2e/test_pipeline_c.py --tb=short
+
+  cpp:
+    name: C++ adapter (real toolchain)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake ninja-build g++
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[dev,web,eval]'
+
+      - name: C++ adapter unit tests
+        run: pytest -q tests/langs/test_c_family_adapter.py --tb=short
+
+      - name: Toolchain probe (cpp)
+        run: |
+          nai languages --json > languages.json || true
+          python - <<'PY'
+          import json
+          payload = json.load(open("languages.json"))
+          entry = next(e for e in payload["languages"] if e["language"] == "cpp")
+          assert entry["status"]["supported"] is True, entry["status"]
+          assert entry["probes"]["local"]["ok"] is True, entry["probes"]["local"]
+          PY
+
+      - name: C++ pipeline end-to-end (stub LLM)
+        run: pytest -q tests/e2e/test_pipeline_cpp.py --tb=short
+
   wheel:
     name: Wheel smoke test
     runs-on: ubuntu-latest
@@ -118,6 +307,7 @@ jobs:
           assert list((root / 'spec' / 'schemas').glob('*.json'))
           assert list((root / 'build' / 'prompts').glob('*.txt'))
           assert list((root / 'langs' / 'knowledge').glob('*/*.md'))
+          assert list((root / 'langs' / 'vendor').glob('*.h'))
           assert (root / 'web' / 'templates' / 'base.html').exists()
           from nai.store import Store
           import tempfile

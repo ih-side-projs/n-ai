@@ -566,6 +566,46 @@ timeout = 3600
 params = ["xcode_project", "scheme", "destination"]
 argv = ["xcodebuild", "test", "-project", "{{xcode_project}}", "-scheme", "{{scheme}}", "-destination", "{{destination}}"]
 timeout = 3600
+
+[recipes.cmake-configure]
+argv = ["cmake", "-S", ".", "-B", "build", "-DCMAKE_BUILD_TYPE=Debug"]
+timeout = 600
+
+[recipes.cmake-build]
+argv = ["cmake", "--build", "build"]
+timeout = 1800
+
+[recipes.ctest]
+params = ["filter"]
+argv = ["ctest", "--output-on-failure", "-R", "{{filter}}"]
+timeout = 1800
+
+[recipes.go-build]
+argv = ["go", "build", "./..."]
+timeout = 1200
+
+[recipes.go-test]
+params = ["filter"]
+argv = ["go", "test", "-json", "{{filter}}"]
+timeout = 1800
+
+[recipes.cargo-build]
+argv = ["cargo", "build", "--workspace"]
+timeout = 1800
+
+[recipes.cargo-test]
+params = ["filter"]
+argv = ["cargo", "test", "-p", "{{filter}}"]
+timeout = 1800
+
+[recipes.npm-build]
+argv = ["npx", "tsc", "--noEmit"]
+timeout = 1800
+
+[recipes.npm-test]
+params = ["filter"]
+argv = ["npx", "vitest", "run", "--reporter=json", "--no-color", "{{filter}}"]
+timeout = 1800
 """
 
 

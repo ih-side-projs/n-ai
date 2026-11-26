@@ -1,0 +1,25 @@
+{
+  "numTotalTestSuites": 1,
+  "numTotalTests": 1,
+  "numPassedTests": 0,
+  "numFailedTests": 1,
+  "numPendingTests": 0,
+  "success": false,
+  "testResults": [
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": ["normalizeText"],
+          "fullName": "normalizeText > R1_collapses whitespace",
+          "status": "failed",
+          "title": "R1_collapses whitespace",
+          "failureMessages": [
+            "Error: not implemented\n    at normalizeText (/ws/src/text-normalizer/index.ts:3:9)\n    at /ws/tests/text-normalizer.test.ts:6:12"
+          ]
+        }
+      ],
+      "name": "/ws/tests/text-normalizer.test.ts",
+      "status": "failed"
+    }
+  ]
+}

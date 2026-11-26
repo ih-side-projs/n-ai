@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from .. import manifest, paths
-from ..exec import PHASE_RUN, needs_shell, shell_argv
+from ..exec import PHASE_RUN, PHASE_SETUP, needs_shell, shell_argv
 from ..langs import knowledge, registry
 from ..langs.base import Outcome
 from ..remote import routing as remote_routing
@@ -473,7 +473,18 @@ def handle_contract_stub(ctx: Any) -> Any:
             # no shell is involved (run phase: no network).
             return _run_string(ctx, cmd, phase=PHASE_RUN)
 
-        ok, out = adapter.validate_stub(ws_root, stub_res.module_import, _run, executable=py_exe)
+        def _run_setup(cmd: str) -> tuple[int, str]:
+            # Dependency installation (npm) belongs to the setup phase, where the
+            # network is allowed; everything else stays in the run phase.
+            return _run_string(ctx, cmd, phase=PHASE_SETUP)
+
+        ok, out = adapter.validate_stub(
+            ws_root,
+            stub_res.module_import,
+            _run,
+            executable=py_exe,
+            run_setup_cmd=_run_setup,
+        )
         if not ok:
             _fail_node(ctx.store, node["id"], f"Contract stub import failed: {out}")
             return _make_job_result(False, error=f"Stub import failed: {out}", output=out)

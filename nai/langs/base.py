@@ -145,6 +145,7 @@ class LanguageAdapter(Protocol):
         run_cmd: Any,
         *,
         executable: str | None = None,
+        run_setup_cmd: Any | None = None,
     ) -> tuple[bool, str]: ...
 
     def extract_signatures(self, source: str) -> str: ...

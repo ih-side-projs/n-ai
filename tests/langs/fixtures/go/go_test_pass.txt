@@ -1,0 +1,8 @@
+{"Time":"2024-05-01T10:00:00.000000+00:00","Action":"start","Package":"tiny-library/internal/text_normalizer"}
+{"Time":"2024-05-01T10:00:00.010000+00:00","Action":"run","Package":"tiny-library/internal/text_normalizer","Test":"TestR1NormalizeText"}
+{"Time":"2024-05-01T10:00:00.010000+00:00","Action":"output","Package":"tiny-library/internal/text_normalizer","Test":"TestR1NormalizeText","Output":"=== RUN   TestR1NormalizeText\n"}
+{"Time":"2024-05-01T10:00:00.010000+00:00","Action":"output","Package":"tiny-library/internal/text_normalizer","Test":"TestR1NormalizeText","Output":"--- PASS: TestR1NormalizeText (0.00s)\n"}
+{"Time":"2024-05-01T10:00:00.010000+00:00","Action":"pass","Package":"tiny-library/internal/text_normalizer","Test":"TestR1NormalizeText","Elapsed":0}
+{"Time":"2024-05-01T10:00:00.020000+00:00","Action":"output","Package":"tiny-library/internal/text_normalizer","Output":"PASS\n"}
+{"Time":"2024-05-01T10:00:00.020000+00:00","Action":"output","Package":"tiny-library/internal/text_normalizer","Output":"ok  \ttiny-library/internal/text_normalizer\t0.003s\n"}
+{"Time":"2024-05-01T10:00:00.020000+00:00","Action":"pass","Package":"tiny-library/internal/text_normalizer","Elapsed":0.003}

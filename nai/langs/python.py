@@ -154,6 +154,7 @@ class PythonAdapter:
         run_cmd: Any,
         *,
         executable: str | None = None,
+        run_setup_cmd: Any | None = None,
     ) -> tuple[bool, str]:
         from ..build import stubs
 

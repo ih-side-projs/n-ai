@@ -1,0 +1,5 @@
+# tiny-library/internal/word_counter
+internal/word_counter/word_counter.go:9:14: undefined: strings
+internal/word_counter/word_counter.go:9:2: too many return values
+	have (int, error)
+	want (int)

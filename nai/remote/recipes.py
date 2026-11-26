@@ -291,5 +291,71 @@ RECIPES: dict[str, RecipeSpec] = {
         timeout=3600.0,
         description="Run the owner-supplied Xcode project's tests on macOS.",
     ),
+    "cmake-configure": RecipeSpec(
+        id="cmake-configure",
+        params={
+            "source_dir": ParamSpec("relpath", required=False),
+            "build_dir": ParamSpec("relpath", required=False),
+        },
+        capabilities=("cmake",),
+        timeout=600.0,
+        description="Configure an out-of-tree CMake build on the worker.",
+    ),
+    "cmake-build": RecipeSpec(
+        id="cmake-build",
+        params={
+            "build_dir": ParamSpec("relpath", required=False),
+            "targets": ParamSpec("tokens", required=False),
+        },
+        capabilities=("cmake",),
+        timeout=1800.0,
+        description="Build a configured CMake tree on the worker.",
+    ),
+    "ctest": RecipeSpec(
+        id="ctest",
+        params={"filter": ParamSpec("token", required=False)},
+        capabilities=("cmake",),
+        timeout=1800.0,
+        description="Run CTest on the worker (`ctest --output-on-failure`).",
+    ),
+    "go-build": RecipeSpec(
+        id="go-build",
+        capabilities=("go",),
+        timeout=1200.0,
+        description="Build and vet the Go module on the worker.",
+    ),
+    "go-test": RecipeSpec(
+        id="go-test",
+        params={"filter": ParamSpec("token", required=False)},
+        capabilities=("go",),
+        timeout=1800.0,
+        description="Run `go test -json` on the worker.",
+    ),
+    "cargo-build": RecipeSpec(
+        id="cargo-build",
+        capabilities=("rust",),
+        timeout=1800.0,
+        description="Build the Cargo workspace on the worker.",
+    ),
+    "cargo-test": RecipeSpec(
+        id="cargo-test",
+        params={"filter": ParamSpec("token", required=False)},
+        capabilities=("rust",),
+        timeout=1800.0,
+        description="Run `cargo test` on the worker.",
+    ),
+    "npm-build": RecipeSpec(
+        id="npm-build",
+        capabilities=("node",),
+        timeout=1800.0,
+        description="Type-check and build the Node project on the worker.",
+    ),
+    "npm-test": RecipeSpec(
+        id="npm-test",
+        params={"filter": ParamSpec("token", required=False)},
+        capabilities=("node",),
+        timeout=1800.0,
+        description="Run vitest on the worker.",
+    ),
 }
 

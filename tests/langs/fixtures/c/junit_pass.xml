@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites>
+  <testsuite name="adder" tests="1" failures="0">
+    <testcase name="R1_adds_two_numbers" classname="adder"/>
+  </testsuite>
+</testsuites>

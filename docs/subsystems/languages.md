@@ -11,6 +11,13 @@ policy instead of hard-coding Python assumptions.
 | `base.py` | `LanguageAdapter` protocol, `Command`, `Outcome`, `ParseResult`, `StubResult`, `ToolCheck` |
 | `registry.py` | `register()`, `unregister()`, `get()`, `language_for()`, `supported()`, `UnknownLanguageError` |
 | `python.py` | Python 3 adapter (pytest, venv/pip, ruff, `NotImplementedError` stubs) |
+| `swift.py` | Swift 6 adapter (SwiftPM, XCTest, `fatalError` stubs) |
+| `typescript.py` | TypeScript adapter (Node 20, npm, vitest, `tsc --noEmit`, `throw new Error` stubs) |
+| `golang.py` | Go adapter (`go.mod`, `go build`/`go vet`, `go test -json`, `panic` stubs) |
+| `rust.py` | Rust adapter (Cargo workspace, `--message-format=json`, libtest, `unimplemented!()` stubs) |
+| `_c_family.py` | C and C++ adapters (CMake + CTest, generated `CMakeLists.txt`, vendored test harnesses) |
+| `_common.py` | shared casing, contract traversal and structural syntax check for the compiled languages |
+| `vendor/` | vendored single-header test frameworks (`nai_assert.h`, `nai_runtime.h`, `doctest.h`) |
 | `support.py` | derived support status, supported list, unsupported-language detection, prompt block |
 | `probe.py` | `probe(language, root=...)` runs the adapter's declared `--version` checks |
 | `knowledge/` | per-language knowledge packs and the job-kind injection map |
@@ -108,6 +115,94 @@ The `tests/langs/fixtures/swift/` samples are **hand-captured** Swift 6.0 /
 Xcode 16 output (see their README); the real-toolchain coverage is
 `tests/e2e/test_pipeline_swift.py`, which skips without `swift`.
 
+## TypeScript
+
+`nai/langs/typescript.py` targets Node 20 with a pinned TypeScript 5 / vitest 2
+toolchain. The adapter owns both manifests, so the model never edits build
+configuration:
+
+| Piece | Rule |
+|-------|------|
+| layout | `src/<component>/index.ts`, `tests/<component>.test.ts`, shared entities in `src/entities.ts` |
+| `package.json` / `tsconfig.json` | **adapter-owned**: regenerated deterministically by `prepare_workspace`; strict, `noEmit`, ESM (`"type": "module"`) |
+| stub | `export function … { throw new Error("not implemented"); }`; integration nodes expose `integrate(): number` |
+| tests | vitest, `it("R1_<behaviour>", …)`, importing `../src/<component>/index.js` |
+| install | `npm ci` when a lockfile exists, else `npm install`; the adapter never adds dependencies |
+| results | vitest's JSON reporter gives per-case outcomes; `tsc --noEmit` diagnostics (`error TSxxxx`) decide `BUILD_ERROR`; `numTotalTests: 0` is `NO_TESTS` |
+| platform lint | a `platform = any|linux` component may not import react, react-dom, react-native, expo or `@react-native/*` |
+
+Remote recipes: `npm-build` and `npm-test`.
+
+## Go
+
+`nai/langs/golang.py` targets Go 1.22 with no third-party dependencies:
+
+| Piece | Rule |
+|-------|------|
+| layout | `internal/<package>/<package>.go`, `internal/<package>/<package>_test.go`, shared entities in `internal/entities/entities.go` |
+| `go.mod` | **adapter-owned**: `settings.go.module` when set, else the kebab-case project name |
+| stub | `panic("not implemented")`; integration nodes expose `func Integrate() int` |
+| tests | standard `testing`, `func Test_<REQ-ID>_<behaviour>(t *testing.T)` |
+| results | `go test -json` events give per-test outcomes; `go build`/`go vet` diagnostics (`file.go:line:col:`) decide `BUILD_ERROR`; a run with no test events is `NO_TESTS` |
+| platform lint | a portable component may not import Fyne, andlabs/ui, lxn/walk or therecipe/qt |
+
+Test names need an underscore before the requirement id (`Test_R1_…`), because
+`TestR1_…` has no separator and the traceability matcher would not see `R1`.
+
+Remote recipes: `go-build` and `go-test`.
+
+## Rust
+
+`nai/langs/rust.py` targets Rust 1.75 / edition 2021 with one crate per
+component:
+
+| Piece | Rule |
+|-------|------|
+| layout | `crates/<crate>/src/lib.rs`, `crates/<crate>/tests/<crate>_test.rs`, shared entities in `crates/entities/src/lib.rs` |
+| manifests | **adapter-owned**: `prepare_workspace` regenerates the workspace `Cargo.toml` and every crate manifest from the crates present on disk plus the contract's `depends_on` edges |
+| stub | `unimplemented!()`; integration nodes expose `pub fn integrate() -> i64` |
+| tests | libtest integration tests, `#[test] fn r1_<behaviour>()` |
+| results | `cargo build --message-format=json` compiler messages decide `BUILD_ERROR`; libtest's `test <name> ... ok|FAILED` lines give per-test outcomes; `running 0 tests` is `NO_TESTS` |
+| test command | targets `--test <crate>_test` only, so doc-test runs cannot look like a zero-test suite |
+| platform lint | a portable component may not `use` iced, egui, gtk/gtk4, slint, druid or relm4 |
+
+Remote recipes: `cargo-build` and `cargo-test`.
+
+## C and C++
+
+`nai/langs/_c_family.py` implements both adapters; `CAdapter` (C11) and
+`CppAdapter` (C++17) differ only in the standard, source extension, stub syntax
+and test framework:
+
+| Piece | Rule |
+|-------|------|
+| layout | `include/<component>/<component>.h`, `src/<component>/<component>.c|cpp`, `tests/<component>/<component>_test.c|cpp` |
+| `CMakeLists.txt` | **adapter-owned**: regenerated deterministically from the directories on disk; one static library and one test executable per component; `*_integration` targets link every component |
+| vendored frameworks | `vendor/nai_assert.h` + `nai_runtime.h` (C) and `vendor/doctest.h` + a generated `tests/doctest_main.cpp` (C++) — no network at test time |
+| stub | C: `NOT_IMPLEMENTED("<symbol>")` (aborts); C++: `throw std::logic_error("not implemented")`; integration nodes expose `int integrate(void)` / `int integrate()` |
+| tests | C: the vendored harness (`nai_begin`/`nai_case`/`NAI_CHECK_*`); C++: doctest `TEST_CASE("R1_<behaviour>")` |
+| results | the test binary prints JUnit XML on stdout (doctest via `--reporters=junit`), so the adapter runs it directly instead of parsing CTest prose; `file:line:col: error:` and linker failures decide `BUILD_ERROR`; sanitizer reports are attached to failure messages |
+| mixed trees | a workspace mixing `.c` and `.cpp`/`.hpp` files is rejected before generation (one language per project) |
+| platform lint | a portable component may not include AppKit, Cocoa, SwiftUI, Foundation, IOKit or Security headers |
+
+Remote recipes: `cmake-configure`, `cmake-build` and `ctest`.
+
+The `tests/langs/fixtures/{c,cpp}/` samples were captured from GCC 15 /
+CMake 4.2 / doctest 2.4; `tests/e2e/test_pipeline_{c,cpp}.py` run the real
+toolchain and skip when it is absent.
+
+## Compiled-language shared helpers
+
+`nai/langs/_common.py` holds the pieces every compiled-language adapter needs:
+`pascal`/`camel`/`snake`/`kebab`, contract traversal (`components`,
+`component_entry`, `entities`, `parse_provide`), a structural bracket/literal
+check (`structural_error`), and `integration_build_failure`. Integration nodes
+have no contract stub, so their expected pre-implementation state is a *build*
+failure that names the integration module and matches a missing-symbol marker
+(`no such file`, `undefined reference`, `did not match any packages`, …);
+`stub_failure_is_valid(..., integration=True, expected_module=...)` accepts
+exactly that and nothing else.
+
 
 ## Knowledge packs
 
@@ -152,5 +247,10 @@ platform-specific code to live in leaf components with portable logic around it.
 4. Add `tests/e2e/fixtures/langs/<id>/project.json` and a
    `tests/e2e/test_pipeline_<id>.py` that loads it;
    `tests/e2e/test_language_fixtures.py` fails until both exist.
-5. Run `python -m nai.spec.schemas` so the contract `language` enum includes it.
-6. Set `project.settings.language` to the new id (or pass `--language`).
+5. Add `tests/langs/test_<id>_adapter.py` plus captured output samples under
+   `tests/langs/fixtures/<id>/` (with a README saying how they were captured),
+   so the parser and stub renderer stay covered without the toolchain.
+6. Add a CI job that installs the toolchain, runs the adapter unit tests, asserts
+   `nai languages --json` reports the toolchain as present, and runs the e2e test.
+7. Run `python -m nai.spec.schemas` so the contract `language` enum includes it.
+8. Set `project.settings.language` to the new id (or pass `--language`).

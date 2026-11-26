@@ -41,18 +41,18 @@ def test_clarify_asks_when_the_brief_requests_an_unsupported_language(monkeypatc
         ),
     )
     store = _Store()
-    ctx, events = _ctx(store, "Build a Rust CLI for parsing logs")
+    ctx, events = _ctx(store, "Build a Kotlin CLI for parsing logs")
 
     result = spec_jobs.handle_clarify(ctx)
 
     questions = result["questions"]
     assert questions[0]["id"] == "Q1"
     assert questions[0]["category"] == "language"
-    assert "Rust" in questions[0]["question"]
+    assert "Kotlin" in questions[0]["question"]
     assert "python" in questions[0]["question"]
     assert [q["id"] for q in questions] == ["Q1", "Q2"]
     assert store.settings is not None
-    assert store.settings["language_request"] == ["Rust"]
+    assert store.settings["language_request"] == ["Kotlin"]
     # Never substitute a language: the project setting is untouched.
     assert "language" not in store.settings
     assert any(args[0] == "spec.unsupported_language" for args, _ in events)
@@ -90,7 +90,7 @@ def test_clarify_language_question_keeps_five_question_limit(monkeypatch):
         ),
     )
     store = _Store()
-    ctx, _ = _ctx(store, "Rewrite our service in TypeScript")
+    ctx, _ = _ctx(store, "Rewrite our service in Ruby")
 
     result = spec_jobs.handle_clarify(ctx)
 
@@ -98,7 +98,7 @@ def test_clarify_language_question_keeps_five_question_limit(monkeypatch):
     assert len(questions) == 5
     assert [q["id"] for q in questions] == ["Q1", "Q2", "Q3", "Q4", "Q5"]
     assert questions[0]["category"] == "language"
-    assert "TypeScript" in questions[0]["question"]
+    assert "Ruby" in questions[0]["question"]
 
 
 def test_clarify_detects_a_language_in_the_intake_guardrails(monkeypatch):

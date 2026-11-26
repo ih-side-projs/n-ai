@@ -53,7 +53,7 @@ and requirement IDs (CORE-1, STO-3, SCH-7, SPEC-3, ...).
 | **SS-TOOLS** | One registry feeding both OpenAI-style tool schemas and an MCP server over stdio |
 | **SS-WEB** | Local FastAPI dashboard: project tree, approvals, editing, controls, logs (SSE), metrics, tools |
 | **SS-EVAL** | Benchmark suites, scripted stub model server, `nai bench`, JSON/Markdown reports |
-| **SS-LANGS** | Language adapters: layout, stubs, commands, result parsing and path policy behind one protocol (Python, Swift) |
+| **SS-LANGS** | Language adapters: layout, stubs, commands, result parsing and path policy behind one protocol (Python, Swift, TypeScript, Go, Rust, C, C++) |
 | **SS-EXEC** | One execution seam for every command: scrubbed environment, setup/run network phases, resource limits, capped streaming output, real cancellation (local or Docker) |
 | **SS-REMOTE** | Pull-based remote workers: named recipes, hashed tokens, deterministic snapshots, leases, real cancellation; macos components build on a Mac over the LAN |
 | **Service** | Thin supervisor for web + runner + on-demand `nai` instances, with a CLI and local control socket |

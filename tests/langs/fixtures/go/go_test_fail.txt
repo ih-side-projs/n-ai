@@ -1,0 +1,9 @@
+{"Time":"2024-05-01T10:00:00.000000+00:00","Action":"start","Package":"tiny-library/internal/word_counter"}
+{"Time":"2024-05-01T10:00:00.010000+00:00","Action":"run","Package":"tiny-library/internal/word_counter","Test":"TestR1CountWords"}
+{"Time":"2024-05-01T10:00:00.010000+00:00","Action":"output","Package":"tiny-library/internal/word_counter","Test":"TestR1CountWords","Output":"=== RUN   TestR1CountWords\n"}
+{"Time":"2024-05-01T10:00:00.010000+00:00","Action":"output","Package":"tiny-library/internal/word_counter","Test":"TestR1CountWords","Output":"    word_counter_test.go:7: got 3, want 2\n"}
+{"Time":"2024-05-01T10:00:00.010000+00:00","Action":"output","Package":"tiny-library/internal/word_counter","Test":"TestR1CountWords","Output":"--- FAIL: TestR1CountWords (0.00s)\n"}
+{"Time":"2024-05-01T10:00:00.010000+00:00","Action":"fail","Package":"tiny-library/internal/word_counter","Test":"TestR1CountWords","Elapsed":0}
+{"Time":"2024-05-01T10:00:00.020000+00:00","Action":"output","Package":"tiny-library/internal/word_counter","Output":"FAIL\n"}
+{"Time":"2024-05-01T10:00:00.020000+00:00","Action":"output","Package":"tiny-library/internal/word_counter","Output":"FAIL\ttiny-library/internal/word_counter\t0.004s\n"}
+{"Time":"2024-05-01T10:00:00.020000+00:00","Action":"fail","Package":"tiny-library/internal/word_counter","Elapsed":0.004}
