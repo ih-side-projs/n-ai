@@ -1,0 +1,12 @@
+- `throw std::logic_error("not implemented")` is deliberate in stubs; remove it when implementing.
+- Do not edit `CMakeLists.txt`, `vendor/` or `include/entities/`; the adapter owns them.
+- Tests that pass only because of undefined behaviour are a known risk: the sanitizer
+  build (`-fsanitize=address,undefined`) catches many, but not all, of them.
+- A raw pointer is non-owning unless you document otherwise; use `std::unique_ptr` for ownership.
+- `std::shared_ptr` is not free; use it only when ownership is genuinely shared.
+- Missing `const` on a method prevents calling it on a `const` object.
+- Implicit conversions can hide bugs; mark single-argument constructors `explicit`.
+- A class with a user-declared destructor needs the rule of five or the rule of zero.
+- Template bloat: prefer plain functions and `std::` containers over templates.
+- Out-of-bounds access is undefined behaviour; use `.at()` when you need bounds checks.
+- Platform: `any`/`linux` components may not include Apple frameworks (verify fails).

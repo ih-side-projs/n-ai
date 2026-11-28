@@ -2,9 +2,10 @@
 import json
 
 import pytest
-from tests.core.conftest import make_client
+
 from nai.llm import LLM, JsonlCallLog, json_schema_format
 from nai.testing.stub_server import StubServer, call, reply
+from tests.core.conftest import make_client
 
 SAMPLING = {"temperature": 0.6, "top_p": 0.95, "top_k": 20}
 MSGS = [{"role": "user", "content": "hi"}]
@@ -106,7 +107,7 @@ def test_CORE2_swap_detected_by_first_token_latency_when_no_endpoint():
         slow = llm.chat("r", MSGS, SAMPLING)                # model had to "load": slow first token
         fast = llm.chat("r", MSGS, SAMPLING)
         assert (slow.swapped, fast.swapped) == (True, False)
-        assert slow.swap_method == "latency" and slow.first_token_seconds >= 0.5
+        assert slow.swap_method in ("latency", "latency-adjusted") and slow.first_token_seconds >= 0.5
         assert fast.first_token_seconds < 0.3
 
 

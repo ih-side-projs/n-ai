@@ -1,14 +1,37 @@
 """SS-SPEC job handlers executed by the WP3 scheduler (SPEC-1..9)."""
 from __future__ import annotations
+
 import json
 import re
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .checkers import check_interfaces, Finding, lint_spec, lint_spec_file
-from .prompts import get_prompt, DECOMPOSE, SELECT_MAP, INTERFACES, CHECK_INTERFACES, COMPONENT_SPEC, RECONCILE, CLARIFY
-from .schemas import DECOMPOSE_SCHEMA, SELECT_MAP_SCHEMA, INTERFACES_SCHEMA, CHECK_INTERFACES_SCHEMA, COMPONENT_SPEC_SCHEMA, RECONCILE_SCHEMA, CLARIFY_SCHEMA
+from .. import layout, manifest, paths
+from ..langs import registry as language_registry
+from ..langs import support as language_support
+from .checkers import check_interfaces, lint_spec
+from .prompts import (
+    CHECK_INTERFACES,
+    CLARIFY,
+    COMPONENT_SPEC,
+    DECOMPOSE,
+    INTAKE,
+    INTERFACES,
+    RECONCILE,
+    SELECT_MAP,
+    get_prompt,
+)
+from .schemas import (
+    CHECK_INTERFACES_SCHEMA,
+    CLARIFY_SCHEMA,
+    COMPONENT_SPEC_SCHEMA,
+    DECOMPOSE_SCHEMA,
+    INTAKE_SCHEMA,
+    INTERFACES_SCHEMA,
+    RECONCILE_SCHEMA,
+    SELECT_MAP_SCHEMA,
+)
+
 
 def _make_job_result(ok: bool, **kwargs: Any) -> Any:
     try:
@@ -16,6 +39,51 @@ def _make_job_result(ok: bool, **kwargs: Any) -> Any:
         return JobResult.success(**kwargs) if ok else JobResult.failure(kwargs.pop("error", "failed"), **kwargs)
     except Exception:
         return {"ok": ok, **kwargs}
+
+def ensure_component_children(store: Any, project_id: str, root_id: str,
+                              component_map: dict[str, Any]) -> tuple[list[str], list[str]]:
+    """Create missing child nodes from a component map, resolving names to node IDs.
+
+    Existing nodes are never modified or re-created. Returns `(created_ids,
+    unresolved_names)`; unresolved components need a corrected component map.
+    """
+    components = list(component_map.get("components") or [])
+    existing = store.list_nodes(project_id, parent_id=root_id) or []
+    by_name = {str(n.get("name")): str(n["id"]) for n in existing if n.get("name")}
+    created: list[str] = []
+    pending = [c for c in components if str(c.get("name") or "") and str(c.get("name")) not in by_name]
+
+    for _ in range(len(pending) + 1):
+        deferred = []
+        progress = False
+        for component in pending:
+            name = str(component.get("name") or "")
+            dep_ids = []
+            unresolved = False
+            for dep in component.get("depends_on") or []:
+                dep_name = dep["name"] if isinstance(dep, dict) else dep
+                node_id = by_name.get(str(dep_name))
+                if not node_id:
+                    unresolved = True
+                    break
+                dep_ids.append(node_id)
+            if unresolved:
+                deferred.append(component)
+                continue
+            node_id = store.create_node(
+                project_id, name, "component",
+                parent_id=root_id,
+                objective=str(component.get("objective") or ""),
+                depends_on=tuple(dep_ids),
+            )
+            by_name[name] = str(node_id)
+            created.append(str(node_id))
+            progress = True
+        pending = deferred
+        if not pending or not progress:
+            break
+    return created, [str(c.get("name")) for c in pending]
+
 
 def _workspace_root(ctx: Any) -> Path:
     if ctx.ws is not None and getattr(ctx.ws, "root", None) is not None:
@@ -25,25 +93,56 @@ def _workspace_root(ctx: Any) -> Path:
         raise RuntimeError("Project has no workspace_path configured")
     return Path(wp)
 
+def _guard_manifest(ctx: Any, ws_root: Path) -> Any | None:
+    force = bool((ctx.job.get("input_ref") or {}).get("force_manifest"))
+    mismatches = manifest.detect_hand_edits(ctx.store, ctx.project, force=force)
+    if mismatches and not force:
+        details = ", ".join(f"{m.relpath} ({m.reason})" for m in mismatches[:5])
+        return _make_job_result(False, error=f"hand edit detected: {details}")
+    return None
+
+
 def _spec_dir(ws_root: Path, node: dict[str, Any]) -> Path:
-    if node.get("parent_id") is None:
-        return ws_root
-    return ws_root / f"SPEC-{node['name']}"
+    return layout.node_dir(ws_root, str(node.get("path") or ""))
 
 def _read_spec_file(ws_root: Path, node: dict[str, Any]) -> str:
-    path = _spec_dir(ws_root, node) / "SPEC.md"
+    path = layout.spec_path(ws_root, str(node.get("path") or ""))
     return path.read_text(encoding="utf-8") if path.is_file() else ""
 
 def _write_spec_file(ws_root: Path, node: dict[str, Any], content: str) -> Path:
-    path = _spec_dir(ws_root, node) / "SPEC.md"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content, encoding="utf-8")
+    path = layout.spec_path(ws_root, str(node.get("path") or ""))
+    paths.write_atomic(path, content, root=ws_root)
+    try:
+        manifest.record(
+            ws_root, layout.relative_to_root(ws_root, path),
+            node_id=node["id"], stage="spec", content=content,
+        )
+    except (OSError, ValueError):
+        pass
     return path
 
 def _write_contract(ws_root: Path, node: dict[str, Any], contract: dict[str, Any]) -> Path:
-    path = _spec_dir(ws_root, node) / "interfaces.json"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(contract, indent=2, sort_keys=True), encoding="utf-8")
+    text = json.dumps(contract, indent=2, sort_keys=True)
+    path = layout.node_dir(ws_root, str(node.get("path") or "")) / "interfaces.json"
+    paths.write_atomic(path, text, root=ws_root)
+    # The root contract is also the canonical project-level contract.json.
+    if node.get("parent_id") is None:
+        root_path = layout.contract_path(ws_root)
+        paths.write_atomic(root_path, text, root=ws_root)
+        try:
+            manifest.record(
+                ws_root, layout.relative_to_root(ws_root, root_path),
+                node_id=node["id"], stage="contract", content=text,
+            )
+        except (OSError, ValueError):
+            pass
+    try:
+        manifest.record(
+            ws_root, layout.relative_to_root(ws_root, path),
+            node_id=node["id"], stage="contract", content=text,
+        )
+    except (OSError, ValueError):
+        pass
     return path
 
 def _get_parent_contract(ctx: Any, node: dict[str, Any]) -> dict[str, Any] | None:
@@ -57,14 +156,57 @@ def _get_siblings(ctx: Any, node: dict[str, Any]) -> list[dict[str, Any]]:
     pid = node.get("parent_id")
     return ctx.store.list_nodes(ctx.project["id"], parent_id=pid) or []
 
+def _normalise_contract_language(contract: dict[str, Any], project: dict[str, Any]) -> str | None:
+    """Keep ``contract.language`` aligned with the project's single language.
+
+    Returns the value the model declared when it differed, so the caller can log
+    it.  Absent values are left absent: the project setting is authoritative.
+    """
+    declared = contract.get("language")
+    project_language = language_registry.language_for(project).id
+    if declared and str(declared) != project_language:
+        contract["language"] = project_language
+        return str(declared)
+    return None
+
+
+def _target_stack(project: dict[str, Any]) -> str:
+    """Target stack string for prompts: explicit setting first, else the adapter's hint."""
+    configured = str(((project.get("settings") or {}).get("target_env") or {}).get("language") or "").strip()
+    if configured:
+        return configured
+    try:
+        return language_registry.language_for(project).stack_hint
+    except language_registry.UnknownLanguageError:
+        return language_registry.DEFAULT_LANGUAGE
+
+
+def _language_context(project: dict[str, Any]) -> str:
+    """Owner-authored text that may name a language (brief, intake, stack hint)."""
+    settings = project.get("settings") or {}
+    intake = settings.get("intake") or {}
+    target_env = settings.get("target_env")
+    parts = [
+        str(project.get("brief") or ""),
+        str(settings.get("intake_refined_brief") or ""),
+        str(intake.get("language") or ""),
+        str(intake.get("stack_libraries") or ""),
+        str(target_env.get("language") or "") if isinstance(target_env, dict) else "",
+    ]
+    return "\n".join(part for part in parts if part)
+
+
 def _call_structured(ctx: Any, prompt_name: str, payload: dict[str, Any], schema: dict[str, Any], tag: str, meta: dict[str, Any] | None = None, max_repairs: int = 3) -> dict[str, Any]:
-    from .structured import call_structured_json, StructuredOutputError
+    from .structured import StructuredOutputError, call_structured_json
     prompt = get_prompt(prompt_name)
-    messages = [{"role": "system", "content": prompt.text}, {"role": "user", "content": json.dumps(payload, indent=2)}]
+    # The supported list is injected at call time so a new adapter never needs a
+    # prompt edit, and the model can never invent a language (SS-LANGS).
+    system = f"{prompt.text}\n\n{language_support.supported_languages_block()}"
+    messages = [{"role": "system", "content": system}, {"role": "user", "content": json.dumps(payload, indent=2)}]
     try:
         return call_structured_json(ctx.client, "reasoner", messages, schema, tag=tag, meta={"job_id": ctx.job["id"], "prompts": [prompt.id], **(meta or {})}, max_repairs=max_repairs)
     except StructuredOutputError as exc:
-        raise RuntimeError(f"Structured output failed after {max_repairs} repairs: {exc}")
+        raise RuntimeError(f"Structured output failed after {max_repairs} repairs: {exc}") from exc
 
 def _size_limits(ctx: Any) -> dict[str, Any]:
     """X9 size limits: project settings > NAI config > spec defaults.
@@ -89,6 +231,19 @@ def _size_limits(ctx: Any) -> dict[str, Any]:
     return {**defaults, **overrides}
 
 
+MAX_REPAIR_ROUNDS = 3
+
+def _round(ctx: Any) -> int:
+    return int((ctx.job.get("input_ref") or {}).get("round", 0))
+
+
+def _requeue(ctx: Any, kind: str, rounds: int, **kwargs: Any) -> Any:
+    if rounds >= MAX_REPAIR_ROUNDS:
+        return _make_job_result(False, error=f"repair round limit ({MAX_REPAIR_ROUNDS}) exceeded", **kwargs)
+    ctx.enqueue(kind, "reasoner", input_ref={"round": rounds + 1})
+    return _make_job_result(True, requeued=True, **kwargs)
+
+
 # ---------------------------------------------------------------------------
 # Stage 1: Decompose
 # ---------------------------------------------------------------------------
@@ -96,9 +251,9 @@ def _size_limits(ctx: Any) -> dict[str, Any]:
 def handle_decompose(ctx: Any) -> Any:
     ctx.check()
     node, project = ctx.node, ctx.project
-    ws_root = _workspace_root(ctx)
+    _workspace_root(ctx)
     brief = node.get("spec_text") or project.get("brief") or ""
-    target_stack = project.get("settings", {}).get("target_env", {}).get("language", "Python 3.12")
+    target_stack = _target_stack(project)
     limits = _size_limits(ctx)
     # X9: max_components_per_level (default 7), NOT the D2 candidate count.
     # D2 candidate count is used by handle_select_map, passed separately.
@@ -115,7 +270,17 @@ def handle_decompose(ctx: Any) -> Any:
         return _make_job_result(False, error=str(e))
     cm = {"components": result["components"], "shared_entities": result["shared_entities"], "external_inputs": result["external_inputs"], "external_outputs": result["external_outputs"]}
     ctx.store.update_node_contract(node["id"], cm)
-    ctx.artifact("component_map", json.dumps(cm, indent=2), f"component_map_{node['name']}.json")
+    # Preserve the component map separately: the interfaces stage later replaces
+    # the root contract with the interface contract.
+    settings = dict(project.get("settings") or {})
+    settings["component_map"] = cm
+    ctx.store.update_project(project["id"], settings=settings)
+    # Create a child node for each component so the spec tree is recursable (stage 11).
+    _created, unresolved = ensure_component_children(ctx.store, project["id"], node["id"], cm)
+    if unresolved:
+        ctx.event("spec.decompose_unresolved", f"Could not resolve dependencies for: {', '.join(unresolved)}",
+                  level="warning", data={"components": unresolved})
+    ctx.artifact("report", json.dumps(cm, indent=2), f"component_map_{node['name']}.json")
     ctx.event("spec.decompose_done", f"Generated component map with {len(cm['components'])} components", level="info", data={"component_count": len(cm["components"])})
     return _make_job_result(True, component_map=cm, prompt_id=get_prompt(DECOMPOSE).id)
 
@@ -138,8 +303,8 @@ def handle_select_map(ctx: Any) -> Any:
         return _make_job_result(False, error=str(e))
     selected = result["merged_map"]
     ctx.store.update_node_contract(node["id"], selected)
-    ctx.artifact("selected_map", json.dumps(selected, indent=2), f"selected_map_{node['name']}.json")
-    ctx.event("spec.select_map_done", f"Selected/merged component map", level="info", data={"selected_index": result["selected_index"]})
+    ctx.artifact("report", json.dumps(selected, indent=2), f"selected_map_{node['name']}.json")
+    ctx.event("spec.select_map_done", "Selected/merged component map", level="info", data={"selected_index": result["selected_index"]})
     return _make_job_result(True, selected_map=selected, prompt_id=get_prompt(SELECT_MAP).id)
 
 
@@ -151,14 +316,29 @@ def handle_interfaces(ctx: Any) -> Any:
     ctx.check()
     node, project = ctx.node, ctx.project
     ws_root = _workspace_root(ctx)
+    guard = _guard_manifest(ctx, ws_root)
+    if guard is not None:
+        return guard
     cm = node.get("contract") or {}
     brief = project.get("brief", "")
-    payload = {"brief": brief, "component_map": cm}
+    payload = {
+        "brief": brief,
+        "component_map": cm,
+        "language": language_registry.language_for(project).id,
+    }
     try:
         result = _call_structured(ctx, INTERFACES, payload, INTERFACES_SCHEMA, "interfaces")
     except RuntimeError as e:
         return _make_job_result(False, error=str(e))
     contract = result["contract"]
+    replaced_language = _normalise_contract_language(contract, project)
+    if replaced_language:
+        ctx.event(
+            "spec.contract_language_normalized",
+            f"Contract declared '{replaced_language}'; project language '{contract['language']}' kept",
+            level="warning",
+            data={"declared": replaced_language, "project_language": contract["language"]},
+        )
     ctx.store.update_node_contract(node["id"], contract)
     _write_contract(ws_root, node, contract)
     ctx.artifact("contract", json.dumps(contract, indent=2), f"interfaces_{node['name']}.json")
@@ -177,19 +357,43 @@ def handle_check_interfaces(ctx: Any) -> Any:
     if not contract:
         return _make_job_result(False, error="No contract found for node")
     code_findings = check_interfaces(contract)
+    platform_findings = [f for f in code_findings if f.code.startswith("SPEC3_PLATFORM")]
+    if platform_findings:
+        # Platform placement is a contract fact, not a scenario gap: the model
+        # cannot repair it by filling a gap, so fail deterministically instead
+        # of looping through repair rounds.
+        details = "; ".join(f.message for f in platform_findings)
+        ctx.event(
+            "spec.platform_violation",
+            f"Platform isolation violated: {details}",
+            level="error",
+            data={"findings": [str(f) for f in platform_findings]},
+        )
+        return _make_job_result(
+            False,
+            error=f"platform isolation violated: {details}",
+            findings=[str(f) for f in platform_findings],
+        )
+    code_findings = [f for f in code_findings if not f.code.startswith("SPEC3_PLATFORM")]
     if code_findings:
         gaps = []
         for f in code_findings:
             match = re.search(r"Scenario (\w+) step (\d+)", f.message)
-            if match:
-                gaps.append({"scenario_id": match.group(1), "step_index": int(match.group(2)), "issue": f.code.replace("SPEC3_", "").lower(), "missing_element": f.message.split("'")[1] if "'" in f.message else "unknown", "suggested_fix": f"Fix {f.code}: {f.message}"})
+            gaps.append({
+                "scenario_id": match.group(1) if match else "",
+                "step_index": int(match.group(2)) if match else 0,
+                "issue": f.code.replace("SPEC3_", "").lower(),
+                "missing_element": f.message.split("'")[1] if "'" in f.message else f.message,
+                "suggested_fix": f"Fix {f.code}: {f.message}",
+                "severity": f.severity,
+            })
         if gaps:
             payload = {"contract": contract, "gaps": gaps}
             try:
                 result = _call_structured(ctx, CHECK_INTERFACES, payload, CHECK_INTERFACES_SCHEMA, "check_interfaces")
                 if not result.get("all_verified"):
                     ctx.event("spec.check_interfaces_gaps", f"Found {len(gaps)} gaps in contract", level="warning", data={"gaps": gaps})
-                    return _make_job_result(True, requeue=True, gaps=gaps, prompt_id=get_prompt(CHECK_INTERFACES).id)
+                    return _requeue(ctx, "check_interfaces", _round(ctx), gaps=gaps, prompt_id=get_prompt(CHECK_INTERFACES).id)
             except RuntimeError as e:
                 return _make_job_result(False, error=str(e))
     ctx.event("spec.check_interfaces_passed", "All interface checks passed", level="info")
@@ -203,28 +407,39 @@ def handle_component_spec(ctx: Any) -> Any:
     ctx.check()
     node, project = ctx.node, ctx.project
     ws_root = _workspace_root(ctx)
+    guard = _guard_manifest(ctx, ws_root)
+    if guard is not None:
+        return guard
     parent_contract = _get_parent_contract(ctx, node)
     if not parent_contract:
         return _make_job_result(False, error="Parent contract not found")
+    settings = dict(project.get("settings") or {})
+    component_map = dict(settings.get("component_map") or {})
     component_info = next((c for c in parent_contract.get("components", []) if c["name"] == node["name"]), None)
+    if component_info is None:
+        component_info = next((c for c in component_map.get("components", []) if c["name"] == node["name"]), None)
     if not component_info:
         return _make_job_result(False, error=f"Component {node['name']} not found in parent contract")
     shared_entities = []
-    for entity in parent_contract.get("entities", []):
+    for entity in (parent_contract.get("entities", []) or component_map.get("shared_entities", [])):
         used = any(entity["name"].lower() in p.get("signature", "").lower() for p in component_info.get("provides", []))
         used = used or (node["name"] in component_info.get("consumes", []))
         if used:
             shared_entities.append(entity)
-    payload = {"component_name": node["name"], "objective": node.get("objective", ""), "shared_entities": shared_entities, "provides": component_info.get("provides", []), "consumes": component_info.get("consumes", []), "dependencies": node.get("depends_on", []), "target_stack": project.get("settings", {}).get("target_env", {}).get("language", "Python 3.12")}
+    payload = {"component_name": node["name"], "objective": node.get("objective", ""), "shared_entities": shared_entities, "provides": component_info.get("provides", []), "consumes": component_info.get("consumes", []), "dependencies": node.get("depends_on", []), "target_stack": _target_stack(project), "platform": component_info.get("platform", "any")}
     try:
         result = _call_structured(ctx, COMPONENT_SPEC, payload, COMPONENT_SPEC_SCHEMA, "component_spec")
     except RuntimeError as e:
         return _make_job_result(False, error=str(e))
     spec_markdown = result["spec_markdown"]
     _write_spec_file(ws_root, node, spec_markdown)
+    # Persist to the store so lint/planning and downstream traceability can read it.
+    ctx.store.update_node_spec(node["id"], spec_markdown)
     requirements = [{"id": r["id"], "text": r["text"], "testable": r.get("testable", True)} for r in result["requirements"]]
     ctx.store.replace_requirements(node["id"], requirements)
-    ctx.artifact("component_spec", spec_markdown, f"SPEC-{node['name']}.md")
+    ctx.artifact("spec", spec_markdown, f"SPEC-{node['name']}.md")
+    if node.get("status") == "draft":
+        ctx.store.transition_node_status(node["id"], "awaiting_approval", note="component spec ready for review")
     ctx.event("spec.component_spec_done", f"Generated spec for {node['name']} with {len(requirements)} requirements", level="info", data={"requirement_count": len(requirements)})
     return _make_job_result(True, spec=spec_markdown, requirements=requirements, prompt_id=get_prompt(COMPONENT_SPEC).id)
 
@@ -245,7 +460,7 @@ def handle_lint(ctx: Any) -> Any:
     if findings:
         error_count = sum(1 for f in findings if f.severity == "error")
         ctx.event("spec.lint_failed", f"Lint found {error_count} errors, {len(findings) - error_count} warnings", level="warning" if error_count else "info", data={"findings": [str(f) for f in findings]})
-        return _make_job_result(True, requeue=True, findings=[str(f) for f in findings])
+        return _requeue(ctx, "lint", _round(ctx), findings=[str(f) for f in findings])
     ctx.event("spec.lint_passed", "Spec lint passed", level="info")
     return _make_job_result(True, findings=[])
 
@@ -256,7 +471,7 @@ def handle_lint(ctx: Any) -> Any:
 
 def handle_reconcile(ctx: Any) -> Any:
     ctx.check()
-    node, project = ctx.node, ctx.project
+    node, _project = ctx.node, ctx.project
     siblings = _get_siblings(ctx, node)
     if len(siblings) <= 1:
         return _make_job_result(True, skipped=True, reason="no_siblings")
@@ -279,9 +494,70 @@ def handle_reconcile(ctx: Any) -> Any:
     error_findings = [f for f in findings if f.get("severity") == "error"]
     if error_findings:
         ctx.event("spec.reconcile_errors", f"Reconcile found {len(error_findings)} errors", level="error", data={"findings": findings})
-        return _make_job_result(True, requeue=True, findings=findings)
+        return _requeue(ctx, "reconcile", _round(ctx), findings=findings)
     ctx.event("spec.reconcile_passed", "Sibling reconciliation passed", level="info", data={"findings": findings})
     return _make_job_result(True, findings=findings, prompt_id=get_prompt(RECONCILE).id)
+
+
+# ---------------------------------------------------------------------------
+# Stage -1: Info Gathering (structured project intake)
+# ---------------------------------------------------------------------------
+
+def handle_intake(ctx: Any) -> Any:
+    """Act as a product manager: ask focused questions, then hand off to design."""
+    ctx.check()
+    project = ctx.project
+    settings = dict(project.get("settings") or {})
+    intake = dict(settings.get("intake") or {})
+    forced = bool((ctx.job.get("input_ref") or {}).get("force_refine"))
+    payload = {
+        "force_design": forced,
+        "brief": project.get("brief", ""),
+        "intake": intake,
+        "answers": intake.get("answers") or {},
+        "previous_questions": settings.get("intake_questions") or [],
+        "readiness_summary": settings.get("intake_readiness_summary") or "",
+    }
+    try:
+        result = _call_structured(ctx, INTAKE, payload, INTAKE_SCHEMA, "intake")
+    except RuntimeError as exc:
+        return _make_job_result(False, error=str(exc))
+
+    questions = result.get("questions") or []
+    ready = bool(result.get("ready_for_design")) or forced
+    if forced:
+        questions = []
+    if not ready and not questions:
+        # Avoid a tight planner loop if a model returns neither readiness nor a
+        # follow-up question.
+        questions = [{
+            "id": "Q1",
+            "question": "What else should we know before design begins?",
+            "why": "More detail is required to design the solution",
+        }]
+    settings["intake_questions"] = questions
+    settings["intake_readiness_summary"] = result.get("readiness_summary", "")
+    settings["intake_refined_brief"] = result.get("refined_brief", "")
+    settings["intake_guardrails"] = result.get("guardrails") or {}
+    settings["intake_waiting"] = not ready and bool(questions)
+
+    if ready:
+        settings["intake_complete"] = True
+        settings["clarified"] = True
+        refined = str(result.get("refined_brief") or "").strip()
+        if refined:
+            roots = ctx.store.list_nodes(project["id"], parent_id=None) or []
+            if roots:
+                ctx.store.update_node_spec(roots[0]["id"], refined)
+        ctx.event("spec.intake_ready", "Info gathering complete; design can begin",
+                  level="info", data={"summary": settings["intake_readiness_summary"]})
+    else:
+        ctx.event("spec.intake_questions", f"Info gathering needs {len(questions)} answer(s)",
+                  level="info", data={"questions": questions})
+
+    ctx.store.update_project(project["id"], settings=settings)
+    return _make_job_result(True, ready_for_design=ready, questions=questions,
+                            prompt_id=get_prompt(INTAKE).id)
 
 
 # ---------------------------------------------------------------------------
@@ -292,12 +568,41 @@ def handle_clarify(ctx: Any) -> Any:
     ctx.check()
     project = ctx.project
     brief = project.get("brief", "")
-    target_stack = project.get("settings", {}).get("target_env", {}).get("language", "Python 3.12")
+    target_stack = _target_stack(project)
     payload = {"brief": brief, "target_stack": target_stack}
     try:
         result = _call_structured(ctx, CLARIFY, payload, CLARIFY_SCHEMA, "clarify")
     except RuntimeError as e:
         return _make_job_result(False, error=str(e))
     questions = result.get("questions", [])
+    detected = language_support.unsupported_languages_in(_language_context(project))
+    if detected:
+        # Never substitute: surface the request as an explicit owner question and
+        # keep the project's language untouched until the owner answers.
+        supported = ", ".join(language_support.supported_languages())
+        others = [q for q in questions if q.get("category") != "language"][:4]
+        merged = [{
+            "question": (
+                f"The brief asks for {', '.join(detected)}, which N-AI does not support yet. "
+                f"Which supported language should this project use? ({supported})"
+            ),
+            "default_answer": language_support.supported_languages()[0],
+            "category": "language",
+        }] + others
+        questions = [{**q, "id": f"Q{index}"} for index, q in enumerate(merged, 1)]
+        ctx.event(
+            "spec.unsupported_language",
+            f"Brief requests unsupported language(s): {', '.join(detected)}",
+            level="warning",
+            data={"requested": detected, "supported": language_support.supported_languages()},
+        )
+    # Persist assumptions so the planner does not re-queue clarify forever.
+    settings = dict(project.get("settings") or {})
+    settings["clarified"] = True
+    settings["clarify_questions"] = questions
+    settings["assumptions"] = [q.get("default_answer") for q in questions if q.get("default_answer")]
+    if detected:
+        settings["language_request"] = detected
+    ctx.store.update_project(project["id"], settings=settings)
     ctx.event("spec.clarify_done", f"Generated {len(questions)} clarification questions", level="info", data={"questions": questions})
     return _make_job_result(True, questions=questions, prompt_id=get_prompt(CLARIFY).id)

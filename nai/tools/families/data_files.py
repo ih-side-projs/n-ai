@@ -14,25 +14,18 @@ from pathlib import Path
 from typing import Any
 
 from ..registry import register_tool
-from ..sandbox import Sandbox
-
-
-# Global sandbox instance (set by the MCP server or CLI)
-_sandbox: Sandbox | None = None
+from ..sandbox import Sandbox, get_current_sandbox
 
 
 def set_sandbox(sandbox: Sandbox) -> None:
-    """Set the global sandbox for tool execution."""
-    global _sandbox
-    _sandbox = sandbox
+    """Deprecated: use `registry.call_tool(..., sandbox=...)` per call."""
+    import warnings
+    warnings.warn("set_sandbox is deprecated; pass sandbox to call_tool", DeprecationWarning, stacklevel=2)
 
 
 def _get_sandbox() -> Sandbox:
-    """Get the sandbox, creating a default if needed."""
-    global _sandbox
-    if _sandbox is None:
-        _sandbox = Sandbox(Path.cwd())
-    return _sandbox
+    sb = get_current_sandbox()
+    return sb if sb is not None else Sandbox(Path.cwd())
 
 
 @register_tool(

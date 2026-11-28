@@ -16,9 +16,9 @@ for k in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "ALL_PROXY",
 for k in ("LLAMA_SWAP_URL", "LLAMA_SWAP_KEY", "REASONER_MODEL", "CODER_MODEL", "NAI_CONFIG"):
     os.environ.pop(k, None)
 
-from nai.testing.stub_server import StubServer  # noqa: E402
 from nai.llm import LLM  # noqa: E402
 from nai.models import ModelClient, ModelProfile, RoleConfig  # noqa: E402
+from nai.testing.stub_server import StubServer  # noqa: E402
 
 needs_git = pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")
 

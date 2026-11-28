@@ -2,7 +2,7 @@
 from datetime import datetime, timedelta, timezone
 
 from fake_store import FakeStore
-from sched_helpers import chat_handler, make_node, make_runner, noop
+from sched_helpers import make_node, make_runner, noop
 
 from nai.sched import JobResult
 from nai.testing.stub_server import StubServer, reply

@@ -1,8 +1,8 @@
-"""In-memory stand-in for nai.store.Store, written ONLY from WP2's INTERFACES.md (the real package was not available to WP3).
+"""In-memory stand-in for nai.store.Store for scheduler tests.
 
-It is deliberately strict where INTERFACES.md is explicit (status edges, command actions, job kinds, roles) and
-deliberately varied where it is silent (event order, how a missing model profile is reported), so the runner cannot
-depend on unspecified behaviour. tests/sched/test_sched_real_store.py runs the same checks against the real Store.
+Constants (status edges, command actions, job kinds) are imported from the real
+store module so the fake can never drift from production behaviour. Only the
+persistence mechanism is faked; the rules are shared.
 """
 from __future__ import annotations
 
@@ -10,17 +10,19 @@ import copy
 import itertools
 from datetime import datetime, timedelta, timezone
 
+from nai.store.store import (
+    _ALLOWED_TRANSITIONS as EDGES,
+)
+from nai.store.store import (
+    COMMAND_ACTIONS as ACTIONS,
+)
+from nai.store.store import (
+    JOB_KINDS,
+)
+
 
 class InvalidTransition(Exception):
     pass
-
-
-EDGES = {"draft": {"awaiting_approval"}, "awaiting_approval": {"approved"}, "approved": {"ready"}, "ready": {"running"},
-         "running": {"verifying", "failed"}, "verifying": {"done", "failed"}, "failed": {"ready", "escalated"},
-         "escalated": {"ready"}, "stale": {"draft", "ready"}}
-JOB_KINDS = {"decompose", "interfaces", "check_interfaces", "component_spec", "reconcile", "contract_stub", "author_tests",
-             "implement", "verify", "integrate", "diagnose", "review"}
-ACTIONS = {"pause", "resume", "cancel_job", "retry_node", "approve", "reject"}
 T0 = datetime(2026, 11, 16, tzinfo=timezone.utc)
 
 
@@ -53,6 +55,17 @@ class FakeStore:
 
     def list_projects(self, status=None):
         return [copy.deepcopy(p) for p in self.projects.values() if status in (None, p["status"])]
+
+    def set_project_status(self, project_id, status):
+        self.projects[project_id]["status"] = status
+
+    def update_project(self, project_id, *, settings=None, **changes):
+        if project_id not in self.projects:
+            raise KeyError(f"unknown project: {project_id}")
+        if settings is not None:
+            self.projects[project_id]["settings"] = dict(settings)
+        for key, value in changes.items():
+            self.projects[project_id][key] = value
 
     # -- nodes -----------------------------------------------------------------------------------------
     def create_node(self, project_id, name, kind, *, parent_id=None, objective="", spec_text="", contract=None, depends_on=(),
@@ -102,7 +115,7 @@ class FakeStore:
         return out[:limit]
 
     def update_job(self, job_id, **fields):
-        allowed = {"status", "started_at", "ended_at", "tokens_in", "tokens_out", "result_ref", "error"}
+        allowed = {"status", "started_at", "ended_at", "tokens_in", "tokens_out", "result_ref", "error", "input_ref"}
         bad = set(fields) - allowed
         if bad:
             raise TypeError(f"update_job got unexpected fields {bad}")

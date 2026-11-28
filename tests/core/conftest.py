@@ -15,9 +15,9 @@ for k in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "ALL_PROXY",
 for k in ("LLAMA_SWAP_URL", "LLAMA_SWAP_KEY", "REASONER_MODEL", "CODER_MODEL", "NAI_CONFIG"):
     os.environ.pop(k, None)
 
-from nai.testing.stub_server import StubServer  # noqa: E402
 from nai.llm import LLM  # noqa: E402
 from nai.models import ModelClient, ModelProfile, RoleConfig  # noqa: E402
+from nai.testing.stub_server import StubServer  # noqa: E402
 
 needs_git = pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")
 
@@ -56,20 +56,52 @@ import os, subprocess, sys, json
 log = {str(log)!r}
 args = sys.argv[1:]
 open(log, "a").write(json.dumps(args) + "\\n")
-if args[0] == "run":
-    mount = args[args.index("-v") + 1].split(":")[0]
-    open(log + ".root", "w").write(mount)
-    print("fakeid"); sys.exit(0)
-if args[0] == "exec":
-    root = open(log + ".root").read()
+VALUE_FLAGS = {{"--name", "--network", "--memory", "--cpus", "--pids-limit",
+               "--cap-drop", "--security-opt", "--user", "-v", "-w", "-e",
+               "--env", "--workdir", "--volume"}}
+
+def mount_root():
+    try:
+        return args[args.index("-v") + 1].split(":")[0]
+    except ValueError:
+        return "."
+
+def split_env():
     env = dict(os.environ)
     i = 1
     while i < len(args) and args[i] in ("-w", "-e"):
         if args[i] == "-e":
             k, v = args[i + 1].split("=", 1); env[k] = v
         i += 2
-    name = args[i]; rest = args[i + 1:]          # timeout -k 5 N bash -o pipefail -lc CMD
-    sys.exit(subprocess.run(rest[rest.index("bash"):], cwd=root, env=env).returncode)
+    return env, i
+
+def payload(start):
+    i = start
+    while i < len(args):
+        if args[i] in VALUE_FLAGS:
+            i += 2
+        elif args[i].startswith("-"):
+            i += 1
+        else:
+            return i
+    return len(args)
+
+if args[0] == "run":
+    root = mount_root()
+    open(log + ".root", "w").write(root)
+    if "-d" in args:
+        print("fakeid"); sys.exit(0)
+    i = payload(1)                       # one-shot setup container: image then argv
+    rest = args[i + 1:]
+    if not rest:
+        sys.exit(0)
+    env, _ = split_env()
+    sys.exit(subprocess.run(rest, cwd=root, env=env).returncode)
+if args[0] == "exec":
+    root = open(log + ".root").read()
+    env, i = split_env()
+    name = args[i]; rest = args[i + 1:]
+    sys.exit(subprocess.run(rest, cwd=root, env=env).returncode)
 sys.exit(0)
 """)
     script.chmod(script.stat().st_mode | stat.S_IEXEC)

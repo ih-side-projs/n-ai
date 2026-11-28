@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% block title %}Workers{% endblock %}
+{% block content %}
+<div class="page-heading">
+  <h1>Remote workers</h1>
+  <span class="badge">read-only</span>
+</div>
+<p class="muted">
+  Workers pull named recipes from the orchestrator; they never receive a
+  model-supplied command. Tokens are managed with
+  <code>nai worker add|list|revoke</code>.
+</p>
+
+<section class="panel">
+  <h2>Workers</h2>
+  {% if workers %}
+  <table class="table">
+    <thead>
+      <tr><th>Name</th><th>Status</th><th>Capabilities</th><th>Toolchains</th><th>Last seen</th></tr>
+    </thead>
+    <tbody>
+      {% for worker in workers %}
+      <tr>
+        <td><strong>{{ worker.name }}</strong><br><span class="muted">{{ worker.id }}</span></td>
+        <td>
+          {% if worker.revoked %}<span class="badge danger">revoked</span>
+          {% elif worker.online %}<span class="badge success">online</span>
+          {% else %}<span class="badge">offline</span>{% endif %}
+        </td>
+        <td>{{ worker.capabilities|join(", ") or "—" }}</td>
+        <td>
+          {% if worker.toolchains %}
+            {% for name, version in worker.toolchains.items() %}<div>{{ name }}: {{ version }}</div>{% endfor %}
+          {% else %}—{% endif %}
+        </td>
+        <td>{{ worker.last_seen or "—" }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">No workers registered. Add one with <code>nai worker add NAME</code>.</p>
+  {% endif %}
+</section>
+
+<section class="panel">
+  <h2>Recent remote tasks</h2>
+  {% if tasks %}
+  <table class="table">
+    <thead>
+      <tr><th>Task</th><th>Recipe</th><th>Status</th><th>Worker</th><th>Redeliveries</th><th>Snapshot</th></tr>
+    </thead>
+    <tbody>
+      {% for task in tasks %}
+      <tr>
+        <td>{{ task.id }}</td>
+        <td>{{ task.recipe }}</td>
+        <td>
+          {% if task.status == "done" %}<span class="badge success">done</span>
+          {% elif task.status == "failed" %}<span class="badge danger">failed</span>
+          {% else %}<span class="badge">{{ task.status }}</span>{% endif %}
+        </td>
+        <td>{{ task.worker_name or "—" }}</td>
+        <td>{{ task.redeliveries }}</td>
+        <td><span class="muted">{{ task.snapshot_sha[:12] }}</span></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">No remote tasks yet.</p>
+  {% endif %}
+</section>
+{% endblock %}

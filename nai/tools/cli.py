@@ -6,20 +6,20 @@ from __future__ import annotations
 import argparse
 import asyncio
 import sys
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 from .mcp_server import run_mcp_server
 
 
-def mcp_main(argv: list[str]) -> int:
+def mcp_main(argv: list[str] | None = None) -> int:
     """Entry point for `nai mcp` command."""
     parser = argparse.ArgumentParser(prog="nai mcp", description="Run the MCP server for tool access")
     parser.add_argument("-w", "--workspace", default=".", help="Workspace root directory")
     parser.add_argument("--http", action="store_true", help="Run HTTP server instead of stdio (not yet implemented)")
     parser.add_argument("--port", type=int, default=8081, help="HTTP port (if --http)")
     
-    args = parser.parse_args(argv)
+    args = parser.parse_args(list(sys.argv[1:] if argv is None else argv))
     
     workspace = Path(args.workspace).resolve()
     

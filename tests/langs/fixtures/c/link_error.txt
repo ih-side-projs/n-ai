@@ -1,0 +1,11 @@
+[ 25%] Building C object CMakeFiles/adder.dir/src/adder/adder.c.o
+[ 50%] Linking C static library libadder.a
+[ 50%] Built target adder
+[ 75%] Building C object CMakeFiles/adder_test.dir/tests/adder/adder_test.c.o
+[100%] Linking C executable adder_test
+/usr/bin/x86_64-linux-gnu-ld.bfd: libadder.a(adder.c.o): in function `adder_add':
+/tmp/ccap/src/adder/adder.c:3:(.text+0x1d): undefined reference to `missing_symbol'
+collect2: error: ld returned 1 exit status
+gmake[2]: *** [CMakeFiles/adder_test.dir/build.make:102: adder_test] Error 1
+gmake[1]: *** [CMakeFiles/Makefile2:1046: CMakeFiles/adder_test.dir/all] Error 2
+gmake: *** [Makefile:101: all] Error 2

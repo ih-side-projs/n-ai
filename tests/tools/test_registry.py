@@ -3,13 +3,9 @@ Tests for the Tool Registry (WP6).
 """
 from __future__ import annotations
 
-import json
-from pathlib import Path
-
 import pytest
 
-from nai.tools.registry import ToolRegistry, ToolSpec, get_registry, register_tool, _python_type_to_json_schema
-from nai.tools.sandbox import Sandbox, SandboxError
+from nai.tools.registry import ToolRegistry, ToolSpec, get_registry
 
 
 class TestToolRegistry:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import subprocess
-from dataclasses import dataclass, asdict, field
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -30,8 +30,8 @@ class BenchmarkReport:
     
     def to_markdown(self) -> str:
         lines = [
-            f"# Benchmark Report",
-            f"",
+            "# Benchmark Report",
+            "",
             f"Generated: {self.generated_at}",
             f"nai version: {self.nai_version}",
             f"Git commit: {self.git_commit}",
@@ -39,24 +39,28 @@ class BenchmarkReport:
             f"Model: {self.model_id}",
             f"Quantization: {self.quantization}",
             f"Benchmark suite: {self.benchmark_suite}",
-            f"",
-            f"## Summary",
-            f"",
+            "",
+            "## Summary",
+            "",
             f"- Total benchmarks: {self.summary.get('total', 0)}",
             f"- Passed: {self.summary.get('passed', 0)}",
             f"- Failed: {self.summary.get('failed', 0)}",
             f"- Success rate: {self.summary.get('success_rate', 0):.1%}",
             f"- Total duration: {self.summary.get('total_duration', 0):.1f}s",
-            f"",
-            f"## Results",
-            f"",
+            "",
+            "## Results",
+            "",
         ]
         
         for result in self.results:
             status = "✅" if result.success else "❌"
             lines.append(f"### {status} {result.benchmark_name}")
             lines.append(f"- ID: {result.benchmark_id}")
+            lines.append(f"- Pipeline: {getattr(result, 'pipeline_mode', 'v2')}")
             lines.append(f"- Duration: {result.duration_seconds:.1f}s" if result.duration_seconds else "- Duration: N/A")
+            holdout = getattr(result, "holdout", None)
+            if holdout and holdout.applied:
+                lines.append(f"- Hold-out: {holdout.passed}/{holdout.total} passed ({holdout.pass_rate:.1%})")
             if result.error:
                 lines.append(f"- Error: {result.error}")
             lines.append("")
@@ -107,7 +111,7 @@ def get_git_commit() -> str:
             capture_output=True, text=True, cwd=Path(__file__).parent.parent.parent
         )
         return result.stdout.strip()[:8] if result.returncode == 0 else "unknown"
-    except Exception:
+    except (OSError, subprocess.SubprocessError):
         return "unknown"
 
 

@@ -4,32 +4,35 @@ Tests for the Tool Families (WP6).
 from __future__ import annotations
 
 import json
-import csv
 import zipfile
-from pathlib import Path
 
 import pytest
 
 from nai.tools.families.data_files import (
+    diff_text,
     read_csv,
     read_json,
-    write_json,
-    diff_text,
-    zip_files,
     unzip_files,
-    set_sandbox,
+    write_json,
+    zip_files,
+)
+from nai.tools.families.project_introspection import (
+    list_spec_nodes,
+    read_contract_stub,
+    read_requirements,
 )
 from nai.tools.sandbox import Sandbox
 
 
 @pytest.fixture
 def sandbox(tmp_path):
-    """Create a sandbox for testing."""
+    """Create a sandbox for testing via the per-call contextvar."""
+    from nai.tools.sandbox import _current_sandbox
+
     s = Sandbox(tmp_path)
-    set_sandbox(s)
-    from nai.tools.families.project_introspection import set_sandbox as set_pi_sandbox
-    set_pi_sandbox(s)
-    return s
+    token = _current_sandbox.set(s)
+    yield s
+    _current_sandbox.reset(token)
 
 
 class TestDataFiles:
@@ -157,14 +160,6 @@ class TestDataFiles:
         
         result = unzip_files("bad.zip", "outputs/extracted")
         assert result.startswith("ERROR:")
-
-
-# Need to import project_introspection tools
-from nai.tools.families.project_introspection import (
-    list_spec_nodes,
-    read_contract_stub,
-    read_requirements,
-)
 
 
 class TestProjectIntrospection:

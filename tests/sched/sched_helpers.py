@@ -9,7 +9,6 @@ from nai.llm import LLM
 from nai.models import ModelProfile, RoleConfig
 from nai.sched import HandlerRegistry, JobResult, Runner, SchedConfig
 
-
 ROOT = Path(__file__).resolve().parents[2]
 
 

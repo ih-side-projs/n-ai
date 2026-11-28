@@ -45,9 +45,11 @@ def test_spec_change_marks_done_node_and_transitive_dependents_stale(store, proj
     first_row = store.get_node(first)
     second_row = store.get_node(second)
     assert first_row["status"] == "stale"
-    assert second_row["status"] == "stale"
+    # Amended §4: only a dependency's *interface* participates in the hash.
+    # A spec-text-only edit must not invalidate the dependent.
+    assert second_row["status"] == "done"
     assert first_row["content_hash"] != first_hash
-    assert second_row["content_hash"] != second_hash
+    assert second_row["content_hash"] == second_hash
     assert first_row["built_hash"] == first_hash
     assert second_row["built_hash"] == second_hash
 
@@ -93,3 +95,13 @@ def test_hash_recompute_is_idempotent(store, project):
     result = store.recompute_project_hashes(project)
     assert result[root] == before
     assert store.get_node(root)["status"] == "draft"
+
+
+def test_spec_change_on_design_node_updates_hash_without_staling(store, project):
+    node = store.create_node(project, "root", "system", spec_text="before")
+    old_hash = store.get_node(node)["content_hash"]
+    store.update_node_spec(node, "after")
+    row = store.get_node(node)
+    assert row["status"] == "draft"
+    assert row["content_hash"] != old_hash
+

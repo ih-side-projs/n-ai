@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block title %}Service{% endblock %}
+{% block content %}
+<div class="page-heading"><div><p class="eyebrow">BACKGROUND SERVICE</p><h1>Service supervisor</h1>
+  <p class="muted">Manage the web, runner and on-demand nai instances.</p></div>
+  <a class="button secondary" href="/api/service">JSON status</a></div>
+
+{% if not service.running %}
+<section class="empty-state panel"><div class="empty-icon">⚠</div><h2>Service supervisor not running</h2>
+  <p>{{ service.error|default('Start it with "nai service start" from the CLI.') }}</p>
+  <p class="tiny muted">The dashboard keeps working, but controls here need the supervisor's local socket.</p>
+</section>
+{% else %}
+<section class="summary-grid">
+  <article class="panel metric-card"><span class="metric-label">Supervisor</span><strong class="metric-value">running</strong><span class="tiny muted">pid {{ service.pid }}</span></article>
+  <article class="panel metric-card"><span class="metric-label">Web UI</span><strong class="metric-value">{{ service.web_url }}</strong></article>
+  <article class="panel metric-card"><span class="metric-label">Runner</span><strong class="metric-value">{% if service.runner_health %}{{ service.runner_health.state|default('unknown') }}{% else %}unknown{% endif %}</strong><span class="tiny muted">alive={{ service.runner_health.alive|default(false) }}</span></article>
+</section>
+
+<section class="panel">
+  <h2>Children</h2>
+  <div class="table-wrap"><table><thead><tr><th>Name</th><th>State</th><th>PID</th><th>Restarts</th><th>Actions</th></tr></thead><tbody>
+  {% for name, child in service.children.items() %}
+    <tr><td><strong>{{ name }}</strong></td><td><span class="status status-{{ 'done' if child.state == 'running' else 'failed' }}">{{ child.state }}</span></td><td>{{ child.pid or '—' }}</td><td>{{ child.restarts }}</td>
+      <td><form method="post" action="/service/control" class="inline-form"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="action" value="restart"><input type="hidden" name="target" value="{{ name }}"><button class="button ghost small">Restart</button></form></td></tr>
+  {% endfor %}
+  </tbody></table></div>
+</section>
+
+<section class="panel">
+  <h2>Submit a new nai instance</h2>
+  <form method="post" action="/service/control" class="inline-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="action" value="exec">
+    <input type="text" name="argv" class="small-input" placeholder="brief.md -w ./workspace" required style="width:60%">
+    <button class="button primary">Submit</button>
+  </form>
+  <p class="tiny muted">Equivalent to <code>nai service exec &lt;args&gt;</code>. Each instance gets its own log.</p>
+</section>
+
+<section class="panel">
+  <h2>Submitted jobs</h2>
+  {% if service.jobs %}
+    <div class="table-wrap"><table><thead><tr><th>Job</th><th>State</th><th>PID</th><th>Log</th><th>Action</th></tr></thead><tbody>
+    {% for jid, job in service.jobs.items() %}
+      <tr><td><code>{{ jid }}</code></td><td>{{ job.state }}</td><td>{{ job.pid or '—' }}</td><td><a href="/service/logs/{{ jid }}">view</a></td>
+        <td><form method="post" action="/service/control" class="inline-form"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="action" value="cancel"><input type="hidden" name="target" value="{{ jid }}"><button class="button ghost small">Cancel</button></form></td></tr>
+    {% endfor %}
+    </tbody></table></div>
+  {% else %}<p class="muted">No submitted jobs yet.</p>{% endif %}
+</section>
+
+<section class="panel">
+  <h2>Stop supervisor</h2>
+  <form method="post" action="/service/control" class="inline-form confirm-form" data-confirm="Stop the supervisor and all children?">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="action" value="stop">
+    <button class="button danger">Stop service</button>
+  </form>
+</section>
+{% endif %}
+{% endblock %}

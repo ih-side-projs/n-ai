@@ -1,5 +1,4 @@
 """Pure scheduler logic: SCH-8 windows, SCH-2/SCH-3 selection, X5 budgets, SCH-4 readiness, SCH-9 health and lock."""
-import json
 import os
 from datetime import datetime, timedelta, timezone
 
@@ -227,10 +226,12 @@ def test_SCH4_dependencies_must_all_be_done(tree):
     a = make_node(s, pid, "a", "running", parent_id=root)
     b = make_node(s, pid, "b", "done", parent_id=root)
     c = make_node(s, pid, "c", "approved", parent_id=root, depends_on=[a, b])
-    assert c not in promote_ready(s, walk_nodes(s, pid))
+    # Amended SCH-4: a healthy-but-not-done dependency permits promotion for
+    # test-authoring batching; strict gating is tested with allow_test_authoring=False.
+    assert c not in promote_ready(s, walk_nodes(s, pid), allow_test_authoring=False)
     s.transition_node_status(a, "verifying")
     s.transition_node_status(a, "done")
-    assert c in promote_ready(s, walk_nodes(s, pid))
+    assert c in promote_ready(s, walk_nodes(s, pid), allow_test_authoring=False)
 
 
 def test_SCH4_only_approved_nodes_are_promoted(tree):

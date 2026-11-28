@@ -1,7 +1,11 @@
 WorkPackages/
-build/
+/build/
 *.log
 __pycache__/
 .venv/
 nai.egg-info/
 .pytest_cache/
+.nai/
+outputs/
+exports.sh
+dist/

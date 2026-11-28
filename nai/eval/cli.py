@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import argparse
 import sys
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
+from .benchmarks import BUILTIN_BENCHMARKS, load_benchmark_suite
 from .harness import BenchmarkHarness
-from .benchmarks import load_benchmark_suite, BUILTIN_BENCHMARKS
-from .reports import generate_report, write_report, get_git_commit
+from .reports import generate_report, get_git_commit, write_report
 
 
 def bench_main(argv: list[str]) -> int:
@@ -22,8 +22,7 @@ def bench_main(argv: list[str]) -> int:
                         help="Benchmark suite directory or 'builtin'")
     parser.add_argument("-w", "--workspace", default="./bench_output",
                         help="Output workspace directory")
-    parser.add_argument("--profile", required=True,
-                        help="Model profile name")
+    parser.add_argument("--profile", help="Model profile name (required unless --list)")
     parser.add_argument("--reasoner", help="Reasoner model ID override")
     parser.add_argument("--coder", help="Coder model ID override")
     parser.add_argument("--quantization", help="Quantization notes")
@@ -35,9 +34,14 @@ def bench_main(argv: list[str]) -> int:
                         default="both", help="Report output format")
     parser.add_argument("--list", action="store_true",
                         help="List available benchmarks and exit")
+    parser.add_argument("--mode", choices=["v1", "v2"], default="v2",
+                        help="Pipeline mode: v2 (store/scheduler, default) or v1 (legacy CLI)")
     
     args = parser.parse_args(argv)
     
+    if not args.list and not args.profile:
+        parser.error("--profile is required unless --list is used")
+
     # Handle --list
     if args.list:
         if args.suite == "builtin":
@@ -77,7 +81,8 @@ def bench_main(argv: list[str]) -> int:
     # Run benchmarks
     harness = BenchmarkHarness(
         benchmarks_dir=Path(args.suite) if args.suite != "builtin" else Path("."),
-        output_dir=Path(args.workspace)
+        output_dir=Path(args.workspace),
+        pipeline_mode=args.mode,
     )
     
     model_id = args.reasoner or args.coder or "auto"
@@ -117,7 +122,7 @@ def bench_main(argv: list[str]) -> int:
     print(f"Failed: {report.summary['failed']}")
     print(f"Success Rate: {report.summary['success_rate']:.1%}")
     print(f"Total Duration: {report.summary['total_duration']:.1f}s")
-    print(f"\nReports written to:")
+    print("\nReports written to:")
     print(f"  JSON: {json_path}")
     print(f"  Markdown: {md_path}")
     

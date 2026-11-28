@@ -16,13 +16,15 @@ class GuardedClient:
     """A ModelClient whose every call first checks cancellation and budget, tags the call with the job (so the runner
     can record it, X6) and adds its tokens to the job's totals. Same API as nai.models.ModelClient."""
 
-    def __init__(self, ctx: "RunContext", client):
+    def __init__(self, ctx: RunContext, client):
         self._ctx, self._client = ctx, client
 
     def chat(self, role: str, messages, **kw):
         self._ctx.check()
         j = self._ctx.job
         kw["meta"] = {**(kw.get("meta") or {}), "job_id": j["id"], "node_id": j.get("node_id"), "job_kind": j.get("kind")}
+        # Let a streaming model call observe cancellation (SCH-6).
+        kw["cancel_event"] = self._ctx.cancel_event
         res = self._client.chat(role, messages, **kw)
         self._ctx._add_usage(res)
         self._ctx.check()
@@ -33,7 +35,7 @@ class GuardedClient:
 
 
 class RunContext:
-    def __init__(self, runner: "Runner", job: dict, node: dict | None, project: dict, profile, budget: Budget):
+    def __init__(self, runner: Runner, job: dict, node: dict | None, project: dict, profile, budget: Budget):
         self._runner = runner
         self.job, self.node, self.project, self.profile, self.budget = job, node, project, profile, budget
         self.store = runner.store_proxy                       # use this, never the runner's own Store, from a handler

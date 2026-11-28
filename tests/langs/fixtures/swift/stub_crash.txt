@@ -1,0 +1,10 @@
+Building for debugging...
+[1/3] Write swift-version-6F3B2A1C4D5E6F70.txt
+[2/3] Emitting module TextNormalizer
+[3/3] Compiling TextNormalizer TextNormalizer.swift
+Build complete! (1.21s)
+Test Suite 'All tests' started at 2026-01-15 10:00:00.000
+Test Suite 'TextNormalizerTests.xctest' started at 2026-01-15 10:00:00.001
+Test Suite 'TextNormalizerTests' started at 2026-01-15 10:00:00.002
+Test Case 'TextNormalizerTests.test_R1_normalizeText' started.
+Fatal error: not implemented: file /Users/dev/TinyLibrary/Sources/TextNormalizer/TextNormalizer.swift, line 4

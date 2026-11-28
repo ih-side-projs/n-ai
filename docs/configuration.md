@@ -93,6 +93,57 @@ The store's `projects.settings` JSON can override X9 limits for one project
 (`max_components_per_level`, `max_depth`, …), plus `target_env` and
 `budget_limit_tokens`. Project values override the TOML `[limits]` table.
 
+`settings.language` selects the [language adapter](subsystems/languages.md) and
+defaults to `python` (migration `0007_project_language.sql`). Only ids whose
+adapter ships a knowledge pack and a toolchain probe are accepted — run
+`nai languages` for the list — and a project has exactly one language. Unknown
+values raise `StoreError`/`UnknownLanguageError` instead of falling back
+silently. `settings.target_env.language` is the human stack string (`Python
+3.12`) used by prompts and the environment block.
+
+### Remote workers
+
+`settings.remote` opts a project into [remote execution](subsystems/remote-workers.md):
+
+```json
+{
+  "remote": {
+    "enabled": true,
+    "worker_wait_seconds": 60,
+    "capabilities": ["macos"],
+    "poll_seconds": 0.25,
+    "keep_snapshots": 5
+  }
+}
+```
+
+`enabled` defaults to `false`: a macos component then builds locally and the
+runner records a `remote.disabled` warning once per job. `capabilities` adds
+requirements on top of the recipe's own (for example a specific toolchain), and
+`worker_wait_seconds` bounds how long a job waits for a capable worker before it
+is requeued without counting an attempt.
+
+### Swift settings
+
+`settings.swift` configures the Swift adapter's owner-supplied Xcode project.
+The project itself is never generated: it lives under `external/`, is excluded
+from the coder's writable globs and is included in worker snapshots.
+
+```json
+{
+  "swift": {
+    "xcode_project": "TinyLibrary.xcodeproj",
+    "xcode_scheme": "TinyLibrary",
+    "xcode_destination": "platform=macOS"
+  }
+}
+```
+
+`xcode_project` is normalised to `external/<value>` (absolute paths and `..` are
+ignored). `xcode_destination` must be one of the recipe's allowlisted
+destinations; an unknown value falls back to `platform=macOS`. Without an Xcode
+project the macOS verification uses `swift test`.
+
 ## Structured-output method (D9)
 
 `nai.spec.structured.call_structured_json()` tries, in order:

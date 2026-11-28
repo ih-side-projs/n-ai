@@ -1,0 +1,23 @@
+{
+  "numTotalTestSuites": 1,
+  "numTotalTests": 1,
+  "numPassedTests": 1,
+  "numFailedTests": 0,
+  "numPendingTests": 0,
+  "success": true,
+  "testResults": [
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": ["normalizeText"],
+          "fullName": "normalizeText > R1_collapses whitespace",
+          "status": "passed",
+          "title": "R1_collapses whitespace",
+          "failureMessages": []
+        }
+      ],
+      "name": "/ws/tests/text-normalizer.test.ts",
+      "status": "passed"
+    }
+  ]
+}

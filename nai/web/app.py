@@ -3,29 +3,43 @@
 from __future__ import annotations
 
 import asyncio
+import html
 import json
 import mimetypes
 import os
 import sqlite3
 import time
 from collections import Counter
+from collections.abc import Generator
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+from html import escape
 from pathlib import Path
-from typing import Any, Generator
+from typing import Any
 
 import bleach
 import mistune
-from fastapi import Depends, FastAPI, Form, HTTPException, Request
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from nai.store import Store
+from nai.store import Store, StoreError
 
+from ..langs import registry as language_registry
+from ..langs import support as language_support
+from ..workflow import (
+    DESIGN,
+    IMPLEMENTATION,
+    INFO_GATHERING,
+    filter_tree_to_phase,
+    next_step,
+    node_phase,
+    project_phase_summary,
+)
 from .metrics import _all_nodes, build_project_metrics
 from .models import ModelServerClient, ModelServerError
 from .security import new_csrf_token, verify_bearer_or_cookie, verify_same_origin, verify_token
-
 
 PACKAGE_DIR = Path(__file__).resolve().parent
 TEMPLATES_DIR = PACKAGE_DIR / "templates"
@@ -53,11 +67,18 @@ class WebSettings:
     bearer_token: str | None = None
     event_poll_seconds: float = 1.0
     max_view_bytes: int = 1_000_000
+    output_roots: tuple[Path, ...] = ()
 
     @classmethod
-    def from_env(cls, database_path: str | Path | None = None) -> "WebSettings":
+    def from_env(cls, database_path: str | Path | None = None) -> WebSettings:
         db_path = Path(database_path or os.environ.get("NAI_DB_PATH", ".nai/nai.sqlite3")).expanduser().resolve()
         status = os.environ.get("NAI_RUNNER_STATUS_FILE")
+        raw_roots = os.environ.get("NAI_OUTPUT_ROOTS", "")
+        output_roots = tuple(
+            Path(item).expanduser().resolve()
+            for item in raw_roots.split(os.pathsep)
+            if item.strip()
+        )
         return cls(
             database_path=db_path,
             llama_swap_url=os.environ.get("NAI_LLAMA_SWAP_URL") or os.environ.get("LLAMA_SWAP_URL"),
@@ -65,7 +86,22 @@ class WebSettings:
             runner_status_file=Path(status).expanduser().resolve() if status else None,
             bearer_token=os.environ.get("NAI_WEB_TOKEN"),
             event_poll_seconds=max(0.25, float(os.environ.get("NAI_WEB_EVENT_POLL_SECONDS", "1"))),
+            output_roots=output_roots,
         )
+
+
+def _language_options() -> list[dict[str, str]]:
+    """Supported languages for the intake and settings dropdowns (registry-derived)."""
+    options: list[dict[str, str]] = []
+    for language_id in language_support.supported_languages():
+        adapter = language_registry.get(language_id)
+        options.append({
+            "id": adapter.id,
+            "display_name": adapter.display_name,
+            "stack_hint": adapter.stack_hint,
+            "test_framework": adapter.test_framework,
+        })
+    return options
 
 
 def create_app(
@@ -103,6 +139,7 @@ def create_app(
             bearer_token=settings.bearer_token,
             event_poll_seconds=max(0.25, settings.event_poll_seconds),
             max_view_bytes=settings.max_view_bytes,
+            output_roots=tuple(Path(p).expanduser().resolve() for p in settings.output_roots),
         )
 
     app = FastAPI(title="N-AI", version="0.1.0", docs_url="/api/docs", redoc_url=None)
@@ -132,9 +169,17 @@ def create_app(
                 verify_same_origin(request)
                 supplied = request.headers.get("x-csrf-token")
                 if not supplied:
+                    # Read the form for CSRF, then replay the raw body so the
+                    # endpoint can still bind Form(...) parameters.
+                    raw = await request.body()
                     form = await request.form()
                     request.state.parsed_form = form
                     supplied = str(form.get("csrf_token") or "")
+
+                    async def replay_receive():
+                        return {"type": "http.request", "body": raw, "more_body": False}
+
+                    request._receive = replay_receive
                 verify_token(csrf_cookie, supplied)
             except HTTPException as exc:
                 return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
@@ -166,7 +211,11 @@ def create_app(
 
     def render(request: Request, name: str, context: dict[str, Any] | None = None, status_code: int = 200):
         payload = {"request": request, "csrf_token": request.state.csrf_token, **(context or {})}
-        return templates.TemplateResponse(request=request, name=name, context=payload, status_code=status_code)
+        response = templates.TemplateResponse(request=request, name=name, context=payload, status_code=status_code)
+        # Control pages reflect live store state; never let a browser cache or
+        # bfcache silently show an old filter/view after a command is processed.
+        response.headers["Cache-Control"] = "no-store"
+        return response
 
     def project_or_404(store: Store, project_id: str) -> dict[str, Any]:
         project = store.get_project(project_id)
@@ -182,7 +231,9 @@ def create_app(
         return project, node
 
     def runner_status() -> dict[str, Any]:
-        path = settings.runner_status_file or (settings.database_path.parent / "runner-status.json")
+        # Runner (SCH-9) writes runner.json into its state dir, which defaults
+        # to the database's folder. Match that default exactly.
+        path = settings.runner_status_file or (settings.database_path.parent / "runner.json")
         if not path.is_file():
             return {"status": "not-reported", "message": "Runner heartbeat is not available yet (WP3 integration)."}
         try:
@@ -244,6 +295,12 @@ def create_app(
             "budget": budget,
             "budget_limit_tokens": budget_limit,
             "budget_percent": budget_percent,
+            "next_step": next_step(project, nodes, jobs),
+            **project_phase_summary(
+                nodes,
+                {nid: [j for j in jobs if j.get("node_id") == nid] for nid in (n["id"] for n in nodes)},
+                project,
+            ),
         }
 
     def node_page_data(store: Store, project_id: str, node: dict[str, Any]) -> dict[str, Any]:
@@ -256,8 +313,11 @@ def create_app(
         for requirement in requirements:
             matched = [test for test in tests if requirement["id"] in test.get("requirement_ids", [])]
             matrix.append({"requirement": requirement, "tests": matched})
-        return {"requirements": requirements, "tests": tests, "jobs": jobs,
-                "artifacts": artifacts, "approvals": approvals, "traceability": matrix}
+        return {
+            "requirements": requirements, "tests": tests, "jobs": jobs,
+            "artifacts": artifacts, "approvals": approvals, "traceability": matrix,
+            "approval_stages": {a.get("stage"): a.get("decision") for a in approvals},
+        }
 
     @app.get("/healthz")
     def healthz():
@@ -284,23 +344,171 @@ def create_app(
 
     @app.get("/", response_class=HTMLResponse)
     @app.get("/projects", response_class=HTMLResponse)
-    def projects_page(request: Request, store: Store = Depends(get_store)):
-        projects = [project_summary(store, p) for p in store.list_projects()]
-        return render(request, "projects.html", {"projects": projects, "active_page": "projects"})
+    def projects_page(request: Request, show_archived: str | None = None,
+                      store: Store = Depends(get_store)):
+        show = str(show_archived or "").lower() in {"1", "true", "yes"}
+        all_projects = store.list_projects()
+        archived_count = sum(1 for p in all_projects if p.get("status") == "archived")
+        visible = all_projects if show else [p for p in all_projects if p.get("status") != "archived"]
+        projects = [project_summary(store, p) for p in visible]
+        return render(request, "projects.html", {
+            "projects": projects,
+            "archived_count": archived_count,
+            "show_archived": show,
+            "output_roots": [str(path) for path in settings.output_roots],
+            "languages": _language_options(),
+            "active_page": "projects",
+        })
+
+    @app.post("/projects/{project_id}/archive")
+    async def project_archive(project_id: str):
+        _enqueue_command(project_id, "archive")
+        return RedirectResponse(url="/projects", status_code=303)
+
+    @app.post("/projects/{project_id}/unarchive")
+    async def project_unarchive(project_id: str):
+        _enqueue_command(project_id, "unarchive")
+        return RedirectResponse(url="/projects", status_code=303)
+
+    @app.post("/projects/create")
+    async def projects_create(
+        request: Request,
+        name: str = Form(...),
+        brief: str = Form(""),
+        language: str = Form(""),
+        interface_type: str = Form(""),
+        target_users: str = Form(""),
+        core_workflows: str = Form(""),
+        non_goals: str = Form(""),
+        runtime_deployment: str = Form(""),
+        stack_libraries: str = Form(""),
+        accessibility_security: str = Form(""),
+        testing_expectations: str = Form(""),
+        output_root: str = Form(""),
+        spec_file: UploadFile | None = File(None),
+    ):
+        """Create a project with structured Info Gathering guardrails."""
+        name = name.strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="Project name is required")
+        if not settings.database_path.is_file():
+            raise HTTPException(status_code=503, detail="N-AI database not found")
+        uploaded_spec = ""
+        if spec_file is not None and spec_file.filename:
+            raw = await spec_file.read(2_000_001)
+            if len(raw) > 2_000_000:
+                raise HTTPException(status_code=413, detail="Spec file exceeds 2 MB")
+            decoded = raw.decode("utf-8", errors="replace")
+            uploaded_spec = decoded if decoded.strip() else ""
+        description = brief.strip() or (uploaded_spec.strip()[:500] if uploaded_spec else "")
+        try:
+            selected_language = language_support.require_supported(
+                (language or "").strip() or language_registry.DEFAULT_LANGUAGE
+            )
+        except language_registry.UnknownLanguageError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        adapter = language_registry.get(selected_language)
+        guardrails = {
+            "description": description,
+            "source": "uploaded-spec" if uploaded_spec else "dialog",
+            "language": adapter.stack_hint if (language or "").strip() else "",
+            "interface_type": interface_type.strip(),
+            "target_users": target_users.strip(),
+            "core_workflows": core_workflows.strip(),
+            "non_goals": non_goals.strip(),
+            "runtime_deployment": runtime_deployment.strip(),
+            "stack_libraries": stack_libraries.strip(),
+            "accessibility_security": accessibility_security.strip(),
+            "testing_expectations": testing_expectations.strip(),
+        }
+        project_settings: dict[str, Any] = {
+            "language": adapter.id,
+            "intake": guardrails,
+            "intake_complete": False,
+            "intake_waiting": False,
+        }
+        if (language or "").strip():
+            project_settings["target_env"] = {"language": adapter.stack_hint}
+        if uploaded_spec:
+            project_settings["intake_complete"] = True
+            project_settings["clarified"] = True
+        selected_root: Path | None = None
+        if output_root.strip():
+            candidate = Path(output_root).expanduser().resolve()
+            allowed = [Path(item).expanduser().resolve() for item in settings.output_roots]
+            if not any(candidate == root or root in candidate.parents for root in allowed):
+                raise HTTPException(status_code=400, detail="output root is not allowed")
+            selected_root = candidate
+        elif settings.output_roots:
+            selected_root = settings.output_roots[0]
+        store = Store(settings.database_path, read_only=False)
+        try:
+            try:
+                pid = store.create_project(
+                    name, description, settings=project_settings, output_root=selected_root,
+                )
+            except (ValueError, StoreError) as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            root_id = store.create_node(
+                pid, "root", "system",
+                objective=description or f"Root specification for {name}",
+                spec_text=uploaded_spec or description,
+            )
+            if uploaded_spec:
+                store.add_artifact(pid, "spec", uploaded_spec, node_id=root_id,
+                                   filename=spec_file.filename or "SPEC.md")
+                store.record_event(pid, "project.spec_uploaded",
+                                   f"Existing spec uploaded for '{name}'", level="info")
+            store.record_event(pid, "project.created_via_web", f"Project '{name}' created from the dashboard", level="info")
+        finally:
+            store.close()
+        return RedirectResponse(url=f"/projects/{pid}", status_code=303)
+
+    @app.post("/projects/{project_id}/intake/answers")
+    async def project_intake_answers(project_id: str, request: Request):
+        form = getattr(request.state, "parsed_form", None) or await request.form()
+        answers = {
+            key[2:]: str(value).strip()
+            for key, value in form.multi_items()
+            if key.startswith("q_") and str(value).strip()
+        }
+        _enqueue_command(project_id, "answer_intake", payload={"answers": answers})
+        return RedirectResponse(url=f"/projects/{project_id}", status_code=303)
+
+    @app.post("/projects/{project_id}/intake/begin")
+    async def project_intake_begin(project_id: str):
+        _enqueue_command(project_id, "begin_design")
+        return RedirectResponse(url=f"/projects/{project_id}", status_code=303)
 
     @app.get("/projects/{project_id}", response_class=HTMLResponse)
-    def project_page(project_id: str, request: Request, store: Store = Depends(get_store)):
+    def project_page(project_id: str, request: Request, phase: str | None = None,
+                     store: Store = Depends(get_store)):
         project = project_summary(store, project_or_404(store, project_id))
         tree = project_tree(store, project_id)
+        # Named workflow phase view: design (specs/approvals) or implementation
+        # (code/tests/integration). "all" (default) keeps both visible.
+        selected_phase = phase if phase in (INFO_GATHERING, DESIGN, IMPLEMENTATION) else "all"
+        if selected_phase in (DESIGN, IMPLEMENTATION):
+            tree = filter_tree_to_phase(tree, selected_phase, project.get("per_node"))
         return render(request, "project.html", {"project": project, "tree": tree,
-                      "runner": runner_status(), "active_page": "projects"})
+                      "runner": runner_status(), "active_page": "projects",
+                      "selected_phase": selected_phase,
+                      "phase_constants": {
+                          "info_gathering": INFO_GATHERING,
+                          "design": DESIGN,
+                          "implementation": IMPLEMENTATION,
+                      }})
 
     @app.get("/projects/{project_id}/nodes/{node_id}", response_class=HTMLResponse)
     def node_page(project_id: str, node_id: str, request: Request, store: Store = Depends(get_store)):
         project, node = node_or_404(store, project_id, node_id)
         data = node_page_data(store, project_id, node)
+        node_phase_value = node_phase(node, data.get("jobs"))
         return render(request, "node.html", {"project": project, "node": node, **data,
-                      "spec_html": render_markdown(node.get("spec_text") or ""), "active_page": "projects"})
+                      "spec_html": render_markdown(node.get("spec_text") or ""),
+                      "phase": node_phase_value,
+                      "phase_label": "Design" if node_phase_value == DESIGN else "Implementation",
+                      "active_page": "projects"})
 
     @app.get("/projects/{project_id}/logs", response_class=HTMLResponse)
     def logs_page(project_id: str, request: Request, job_id: str | None = None, store: Store = Depends(get_store)):
@@ -320,10 +528,71 @@ def create_app(
 
     @app.get("/models", response_class=HTMLResponse)
     def models_page(request: Request, store: Store = Depends(get_store)):
+        from ..config import load_config
+
         profiles = _list_profiles(store)
+        stored_names = {p["name"] for p in profiles}
+        cfg = load_config()
+        # Include the built-in default profile so model ids are always editable,
+        # even before any profile has been saved to the store.
+        known = set(stored_names)
+        for name, profile in cfg.profiles.items():
+            if name not in known:
+                profiles.append({"name": name, "reasoner": profile.reasoner.to_dict(),
+                                 "coder": profile.coder.to_dict(),
+                                 "swap_cost_seconds": profile.swap_cost_seconds})
         snapshot = app.state.model_client.snapshot()
+        model_ids = []
+        for model in snapshot.get("models") or []:
+            if isinstance(model, dict) and model.get("id"):
+                model_ids.append(str(model["id"]))
         return render(request, "models.html", {"profiles": profiles, "snapshot": snapshot,
-                      "active_page": "models", "smoke_result": None})
+                      "active_page": "models", "smoke_result": None, "message": None,
+                      "stored_names": stored_names, "model_ids": model_ids})
+
+    @app.post("/models/profile")
+    async def models_save_profile(request: Request):
+        """Persist a model profile (default: built-in ids) from the dashboard."""
+        form = getattr(request.state, "parsed_form", None) or await request.form()
+        name = str(form.get("name") or "default").strip() or "default"
+        role = str(form.get("role") or "reasoner")
+        model_id = str(form.get("model_id") or "").strip()
+        if not model_id:
+            raise HTTPException(status_code=400, detail="model_id is required")
+        if role not in ("reasoner", "coder"):
+            raise HTTPException(status_code=400, detail="role must be reasoner or coder")
+
+        from ..config import load_config
+        from ..models import ModelProfile, default_profile
+
+        store = Store(settings.database_path, read_only=False)
+        try:
+            # Merge into the *stored* profile first, so editing one role does not
+            # reset the other role (or ctx/sampling) back to config defaults.
+            raw = store.get_model_profile(name)
+            cfg = load_config()
+            if raw:
+                profile = ModelProfile.from_dict(name, {
+                    "reasoner": raw.get("reasoner") or {},
+                    "coder": raw.get("coder") or {},
+                    "swap_cost_seconds": raw.get("swap_cost_seconds"),
+                })
+            elif name in cfg.profiles:
+                profile = cfg.profiles[name]
+            else:
+                profile = default_profile()
+            reasoner = profile.reasoner.to_dict()
+            coder = profile.coder.to_dict()
+            if role == "reasoner":
+                reasoner["model_id"] = model_id
+            else:
+                coder["model_id"] = model_id
+            sw = form.get("swap_cost_seconds")
+            swap_cost = float(sw) if sw not in (None, "") else profile.swap_cost_seconds
+            store.save_model_profile(name, reasoner, coder, swap_cost_seconds=swap_cost)
+        finally:
+            store.close()
+        return RedirectResponse(url="/models", status_code=303)
 
     @app.post("/models/smoke-test", response_class=HTMLResponse)
     def models_smoke_test(request: Request, store: Store = Depends(get_store)):
@@ -381,18 +650,39 @@ def create_app(
     # JSON API (WEB-15): mirrors the read-only pages above.
     # ------------------------------------------------------------------
     @app.get("/api/projects")
-    def api_projects(store: Store = Depends(get_store)):
-        return {"projects": [project_summary(store, p) for p in store.list_projects()]}
+    def api_projects(show_archived: str | None = None, store: Store = Depends(get_store)):
+        show = str(show_archived or "").lower() in {"1", "true", "yes"}
+        projects = [p for p in store.list_projects() if show or p.get("status") != "archived"]
+        return {"projects": [project_summary(store, p) for p in projects]}
 
     @app.get("/api/projects/{project_id}")
     def api_project(project_id: str, store: Store = Depends(get_store)):
         project = project_summary(store, project_or_404(store, project_id))
         return {"project": project, "tree": project_tree(store, project_id), "runner": runner_status()}
 
+    @app.get("/api/projects/{project_id}/phase")
+    def api_phase(project_id: str, phase: str | None = None, store: Store = Depends(get_store)):
+        """Named workflow phase state for a project (design/implementation/mixed)."""
+        project = project_summary(store, project_or_404(store, project_id))
+        tree = project_tree(store, project_id)
+        if phase in (DESIGN, IMPLEMENTATION):
+            tree = filter_tree_to_phase(tree, phase, project.get("per_node"))
+        return {
+            "phase": project["phase"],
+            "design_count": project["design_count"],
+            "implementation_count": project["implementation_count"],
+            "selected_phase": phase if phase in (DESIGN, IMPLEMENTATION) else "all",
+            "per_node": project["per_node"],
+            "tree": tree,
+        }
+
     @app.get("/api/projects/{project_id}/nodes/{node_id}")
     def api_node(project_id: str, node_id: str, store: Store = Depends(get_store)):
         _, node = node_or_404(store, project_id, node_id)
-        return {"node": node, **node_page_data(store, project_id, node)}
+        data = node_page_data(store, project_id, node)
+        phase = node_phase(node, data.get("jobs"))
+        return {"node": node, **data, "phase": phase,
+                "phase_label": "Design" if phase == DESIGN else "Implementation"}
 
     @app.get("/api/projects/{project_id}/logs")
     def api_logs(project_id: str, job_id: str | None = None, limit: int = 100,
@@ -479,6 +769,63 @@ def create_app(
 
     # --- WP8 additions: approvals, escalations, tools ---
 
+    @app.get("/projects/{project_id}/settings", response_class=HTMLResponse)
+    def project_settings_page(project_id: str, request: Request, store: Store = Depends(get_store)):
+        project = store.get_project(project_id)
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+        settings = project.get("settings") or {}
+        return templates.TemplateResponse(request=request, name="settings.html",
+            context={"request": request, "csrf_token": request.state.csrf_token,
+                     "project": project, "settings": settings, "active_page": "projects",
+                     "languages": _language_options()})
+
+    @app.post("/projects/{project_id}/settings")
+    async def project_settings_save(
+        project_id: str, request: Request,
+        max_requirements: int = Form(8), max_functions: int = Form(10),
+        max_components: int = Form(7), max_depth: int = Form(4),
+        budget_limit_tokens: int = Form(0), test_commands: str = Form(""),
+        backup_location: str = Form(""), target_language: str = Form("python"),
+    ):
+        store = Store(settings.database_path, read_only=False)
+        try:
+            project = store.get_project(project_id)
+            if not project:
+                raise HTTPException(status_code=404, detail="Project not found")
+            try:
+                language_id = language_support.require_supported(
+                    target_language.strip() or language_registry.DEFAULT_LANGUAGE
+                )
+            except language_registry.UnknownLanguageError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            adapter = language_registry.get(language_id)
+            current = dict(project.get("settings") or {})
+            limits = dict(current.get("size_limits") or current)
+            limits.update({
+                "max_requirements_per_component": max_requirements,
+                "max_public_functions_per_component": max_functions,
+                "max_components_per_level": max_components,
+                "max_depth": max_depth,
+            })
+            current.update({
+                "max_requirements_per_component": max_requirements,
+                "max_public_functions_per_component": max_functions,
+                "max_components_per_level": max_components,
+                "max_depth": max_depth,
+                "budget_limit_tokens": budget_limit_tokens or None,
+                "test_commands": [c.strip() for c in test_commands.splitlines() if c.strip()],
+                "backup_location": backup_location.strip() or None,
+                "language": adapter.id,
+                "target_env": {**(current.get("target_env") or {}), "language": adapter.stack_hint},
+            })
+            store.update_project(project_id, settings=current)
+            store.record_event(project_id, "project.settings_updated", "Project settings updated via dashboard",
+                               level="info", data={"limits": limits})
+        finally:
+            store.close()
+        return RedirectResponse(url=f"/projects/{project_id}/settings", status_code=303)
+
     @app.get("/approvals", response_class=HTMLResponse)
     def approvals_page(request: Request, store: Store = Depends(get_store)):
         pending = []
@@ -519,6 +866,146 @@ def create_app(
                     escalated.append({"project": p, "node": n})
         return {"escalations": escalated}
 
+    def _service_socket() -> Path | None:
+        import os
+
+        state = Path(os.environ.get("NAI_STATE_DIR", settings.database_path.parent)).expanduser().resolve()
+        sock = state / "service.sock"
+        return sock if sock.exists() else None
+
+    def _service_call(cmd: str, **kwargs: Any) -> dict[str, Any]:
+        from nai.service.protocol import request as service_request
+
+        sock = _service_socket()
+        if not sock:
+            raise RuntimeError("Service supervisor is not running")
+        resp = service_request(sock, cmd, **kwargs)
+        if not resp.get("ok"):
+            raise RuntimeError(resp.get("error") or "service command failed")
+        return resp.get("data") or {}
+
+    @app.get("/service", response_class=HTMLResponse)
+    def service_page(request: Request):
+        try:
+            data = _service_call("status")
+        except Exception as exc:  # noqa: BLE001
+            data = {"running": False, "error": str(exc), "children": {}, "jobs": {}}
+        return templates.TemplateResponse(request=request, name="service.html",
+            context={"request": request, "csrf_token": request.state.csrf_token,
+                     "service": data, "active_page": "service"})
+
+    @app.get("/service/logs/{name}")
+    def service_logs(name: str, request: Request):
+        try:
+            text = _service_call("logs", name=name, lines=200)
+        except Exception as exc:  # noqa: BLE001
+            text = f"ERROR: {exc}"
+        return HTMLResponse(
+            '<!doctype html><html><head><title>nai service log</title>'
+            '<link rel="stylesheet" href="/static/app.css"></head><body><main class="container">'
+            f'<div class="page-heading"><h1>Log: {escape(name)}</h1><a class="button secondary" href="/service">Back</a></div>'
+            f'<pre class="code-block">{html.escape(text)}</pre></main></body></html>'
+        )
+
+    @app.post("/service/control")
+    async def service_control(request: Request, action: str = Form(...), target: str = Form(""),
+                              argv: str = Form("")):
+        try:
+            if action == "stop":
+                data = _service_call("stop")
+            elif action == "restart":
+                data = _service_call("restart", name=target)
+            elif action == "exec":
+                # WEB-13: browser must not control dangerous flags. Accept only
+                # a spec path and optional -w workspace; the supervisor builds argv.
+                import shlex
+
+                try:
+                    parts = shlex.split(argv)
+                except ValueError as exc:
+                    raise ValueError(f"invalid command: {exc}") from exc
+                if not parts or any(p.startswith("-") and p != "-w" for p in parts):
+                    raise ValueError("only a spec path and optional -w WORKSPACE are allowed")
+                safe_argv: list[str] = []
+                i = 0
+                while i < len(parts):
+                    if parts[i] == "-w":
+                        if i + 1 >= len(parts):
+                            raise ValueError("-w needs a workspace path")
+                        safe_argv += ["-w", parts[i + 1]]
+                        i += 2
+                    else:
+                        safe_argv.append(parts[i])
+                        i += 1
+                data = _service_call("exec", argv=safe_argv, name=target or None)
+            elif action == "cancel":
+                data = _service_call("cancel", id=target)
+            else:
+                raise ValueError(f"unknown action: {action}")
+            msg = f"Service action '{escape(action)}' completed: {escape(str(data))}"
+            level = "success"
+        except Exception as exc:  # noqa: BLE001
+            msg = f"Service action failed: {escape(str(exc))}"
+            level = "error"
+        return HTMLResponse(
+            f'<div class="notice {level}" role="status">{msg} '
+            '<a href="/service">Refresh</a></div>'
+        )
+
+    @app.get("/api/service")
+    def api_service():
+        try:
+            return {"running": True, **_service_call("status")}
+        except Exception as exc:  # noqa: BLE001
+            return {"running": False, "error": str(exc)}
+
+    def _worker_rows(store: Store) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        """Read-only worker/task view; a pre-migration database simply has none."""
+        try:
+            worker_rows = [dict(row) for row in store.conn.execute(
+                "SELECT id, name, capabilities_json, toolchains_json, last_seen, revoked"
+                " FROM workers ORDER BY name, id"
+            ).fetchall()]
+            task_rows = [dict(row) for row in store.conn.execute(
+                "SELECT t.id, t.recipe, t.status, t.redeliveries, t.snapshot_sha, t.updated_at,"
+                " w.name AS worker_name FROM remote_tasks t LEFT JOIN workers w ON w.id=t.worker_id"
+                " ORDER BY t.created_at DESC, t.id DESC LIMIT 25"
+            ).fetchall()]
+        except sqlite3.OperationalError:
+            return [], []
+        cutoff = (datetime.now(timezone.utc) - timedelta(seconds=60)).isoformat(
+            timespec="microseconds"
+        ).replace("+00:00", "Z")
+        workers: list[dict[str, Any]] = []
+        for row in worker_rows:
+            try:
+                caps = json.loads(row.pop("capabilities_json") or "[]")
+            except ValueError:
+                caps = []
+            try:
+                tools = json.loads(row.pop("toolchains_json") or "{}")
+            except ValueError:
+                tools = {}
+            workers.append({
+                **row,
+                "capabilities": caps if isinstance(caps, list) else [],
+                "toolchains": tools if isinstance(tools, dict) else {},
+                "revoked": bool(row.get("revoked")),
+                "online": not row.get("revoked") and str(row.get("last_seen") or "") >= cutoff,
+            })
+        return workers, task_rows
+
+    @app.get("/workers", response_class=HTMLResponse)
+    def workers_page(request: Request, store: Store = Depends(get_store)):
+        workers, tasks = _worker_rows(store)
+        return render(request, "workers.html",
+                      {"workers": workers, "tasks": tasks, "active_page": "workers"})
+
+    @app.get("/api/workers")
+    def api_workers(store: Store = Depends(get_store)):
+        workers, tasks = _worker_rows(store)
+        return {"workers": workers, "tasks": tasks}
+
     @app.get("/tools", response_class=HTMLResponse)
     def tools_page(request: Request, store: Store = Depends(get_store)):
         from collections import defaultdict
@@ -550,14 +1037,65 @@ def create_app(
 
     @app.post("/tools/call")
     async def tools_call(request: Request, tool_name: str = Form(...), arguments: str = Form("{}"),
-                         store: Store = Depends(get_store)):
+                         workspace: str | None = Form(None)):
+        """Execute a registered tool through the same registry the MCP server uses.
+
+        The tool runs in a sandbox rooted at the chosen workspace (default: the
+        web process state dir). Errors come back as `ERROR:` strings (X3).
+        """
         try:
             args = json.loads(arguments)
-        except json.JSONDecodeError:
-            raise HTTPException(status_code=400, detail="Invalid JSON arguments")
+            if not isinstance(args, dict):
+                raise ValueError("arguments must be a JSON object")
+        except (json.JSONDecodeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid JSON arguments: {exc}") from exc
+
+        ws_root: Path | None = None
+        try:
+            from nai.tools.registry import get_registry
+            from nai.tools.sandbox import Sandbox
+
+            # Only allow sandbox roots that are registered project workspaces.
+            # Never trust an arbitrary browser-supplied path (TLS-5).
+            allowed_roots: set[Path] = set()
+            if settings.database_path.is_file():
+                # Open in this coroutine: a sync Store dependency would be created
+                # in a worker thread and cannot be used from the event loop.
+                with Store(settings.database_path, read_only=True) as store:
+                    for proj in store.list_projects():
+                        wp = (proj.get("workspace_path") or "").strip()
+                        if wp:
+                            allowed_roots.add(Path(wp).expanduser().resolve())
+            allowed_roots.add((settings.database_path.parent / "tools-workspace").resolve())
+
+            if workspace:
+                candidate = Path(workspace).expanduser().resolve()
+                if candidate not in allowed_roots:
+                    raise ValueError("workspace must be a registered project workspace")
+                ws_root = candidate
+            else:
+                ws_root = settings.database_path.parent / "tools-workspace"
+            ws_root.mkdir(parents=True, exist_ok=True)
+            sandbox = Sandbox(ws_root)
+            registry = get_registry()
+            result = registry.call_tool(tool_name, args, sandbox)
+            is_error = result.startswith("ERROR:")
+        except Exception as exc:  # noqa: BLE001 - tool failures are reported as data
+            result = f"ERROR: {type(exc).__name__}: {exc}"
+            is_error = True
         return JSONResponse({"tool": tool_name, "arguments": args,
-                             "result": f"Tool execution would be proxied to MCP server. Arguments: {json.dumps(args)}",
-                             "isError": False})
+                             "result": result, "isError": is_error,
+                             "workspace": str(ws_root) if ws_root else None})
+
+    def _enqueue_command(pid: str, action: str, nid: str | None = None, payload: dict | None = None):
+        """All state changes go through the commands table (STO-3)."""
+        if not settings.database_path.is_file():
+            raise HTTPException(status_code=503, detail="N-AI database not found")
+        store = Store(settings.database_path, read_only=False)
+        try:
+            return store.enqueue_command(pid, action, node_id=nid, payload=payload or {})
+        finally:
+            store.close()
 
     def _writable_store() -> Store:
         if not settings.database_path.is_file():
@@ -604,53 +1142,53 @@ def create_app(
             store.close()
         return RedirectResponse(url=f"/projects/{project_id}/nodes/{node_id}", status_code=303)
 
+    def _read_store() -> Store:
+        if not settings.database_path.is_file():
+            raise HTTPException(status_code=503, detail="N-AI database not found")
+        return Store(settings.database_path, read_only=True)
+
     @app.post("/projects/{project_id}/nodes/{node_id}/approve")
-    async def node_approve(project_id: str, node_id: str, request: Request, note: str = Form("")):
-        store = _writable_store()
+    async def node_approve(project_id: str, node_id: str, request: Request,
+                           note: str = Form(""), stage: str = Form("component-spec")):
+        # STO-3: web never writes approvals/status directly; enqueue a command.
+        if stage not in ("component-map", "interfaces", "component-spec", "escalation"):
+            raise HTTPException(status_code=400, detail="invalid approval stage")
+        store = _read_store()
         try:
             node = store.get_node(node_id)
             if not node or node.get("project_id") != project_id:
                 raise HTTPException(status_code=404, detail="Node not found")
-            if node["status"] not in ("draft", "awaiting_approval"):
-                raise HTTPException(status_code=400, detail=f"Cannot approve node in status '{node['status']}'")
-            store.add_approval(node_id, "component-spec", "approved", note=note)
-            store.transition_node_status(node_id, "approved", note=note)
-            store.record_event(project_id, "node.approved", f"Node {node_id} approved",
-                               node_id=node_id, level="info", data={"note": note, "action": "web_approve"})
         finally:
             store.close()
+        _enqueue_command(project_id, "approve", node_id, {"stage": stage, "note": note})
         return RedirectResponse(url=f"/projects/{project_id}/nodes/{node_id}", status_code=303)
 
     @app.post("/projects/{project_id}/nodes/{node_id}/reject")
-    async def node_reject(project_id: str, node_id: str, request: Request, note: str = Form(...)):
-        store = _writable_store()
+    async def node_reject(project_id: str, node_id: str, request: Request,
+                          note: str = Form(...), stage: str = Form("component-spec")):
+        if stage not in ("component-map", "interfaces", "component-spec", "escalation"):
+            raise HTTPException(status_code=400, detail="invalid approval stage")
+        store = _read_store()
         try:
             node = store.get_node(node_id)
             if not node or node.get("project_id") != project_id:
                 raise HTTPException(status_code=404, detail="Node not found")
-            store.add_approval(node_id, "component-spec", "rejected", note=note)
-            store.transition_node_status(node_id, "draft", note=note)
-            store.record_event(project_id, "node.rejected", f"Node {node_id} rejected",
-                               node_id=node_id, level="warning", data={"note": note, "action": "web_reject"})
         finally:
             store.close()
+        _enqueue_command(project_id, "reject", node_id, {"stage": stage, "note": note})
         return RedirectResponse(url=f"/projects/{project_id}/nodes/{node_id}", status_code=303)
 
     @app.post("/projects/{project_id}/nodes/{node_id}/retry")
     async def node_retry(project_id: str, node_id: str, request: Request):
-        store = _writable_store()
+        store = _read_store()
         try:
             node = store.get_node(node_id)
             if not node or node.get("project_id") != project_id:
                 raise HTTPException(status_code=404, detail="Node not found")
-            if node["status"] not in ("failed", "escalated"):
-                raise HTTPException(status_code=400, detail=f"Cannot retry node in status '{node['status']}'")
-            store.transition_node_status(node_id, "ready", note="Retry requested via web UI")
-            store.increment_node_attempts(node_id, 1)
-            store.record_event(project_id, "node.retry", f"Node {node_id} retry requested",
-                               node_id=node_id, level="info", data={"action": "web_retry"})
         finally:
             store.close()
+        # CommandProcessor._retry_node resets the budget and does not add an attempt.
+        _enqueue_command(project_id, "retry_node", node_id, {})
         return RedirectResponse(url=f"/projects/{project_id}/nodes/{node_id}", status_code=303)
 
     @app.post("/projects/{project_id}/nodes/{node_id}/rerun_stage")
@@ -716,7 +1254,7 @@ def create_app(
             if not isinstance(order, list):
                 raise ValueError
         except (json.JSONDecodeError, ValueError):
-            raise HTTPException(status_code=400, detail="node_order must be a JSON array")
+            raise HTTPException(status_code=400, detail="node_order must be a JSON array") from None
         store = _writable_store()
         try:
             store.enqueue_command(project_id, "reorder", payload={"order": order})

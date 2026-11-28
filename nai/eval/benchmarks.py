@@ -32,7 +32,7 @@ class BenchmarkSuite:
     def add_benchmark(self, spec: BenchmarkSpec) -> None:
         self.benchmarks.append(spec)
     
-    def filter(self, archetype: str | None = None, size_grade: str | None = None) -> "BenchmarkSuite":
+    def filter(self, archetype: str | None = None, size_grade: str | None = None) -> BenchmarkSuite:
         filtered = BenchmarkSuite(name=self.name, description=self.description)
         for b in self.benchmarks:
             if archetype and b.archetype != archetype:

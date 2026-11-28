@@ -1,0 +1,25 @@
+{
+  "numTotalTestSuites": 1,
+  "numTotalTests": 1,
+  "numPassedTests": 0,
+  "numFailedTests": 1,
+  "numPendingTests": 0,
+  "success": false,
+  "testResults": [
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": ["countWords"],
+          "fullName": "countWords > R1_counts whitespace separated words",
+          "status": "failed",
+          "title": "R1_counts whitespace separated words",
+          "failureMessages": [
+            "AssertionError: expected 3 to be 2\n    at /ws/tests/word-counter.test.ts:7:32"
+          ]
+        }
+      ],
+      "name": "/ws/tests/word-counter.test.ts",
+      "status": "failed"
+    }
+  ]
+}

@@ -1,19 +1,16 @@
 """Tests for D9 fallback chain and explicit scenario step fields (WP4 fixes)."""
 from __future__ import annotations
 
-import json
 from types import SimpleNamespace
 
 import pytest
 
+from nai.spec.checkers import check_interfaces
 from nai.spec.structured import (
-    StructuredOutputError,
     _is_rejection,
     _json_schema_to_grammar,
     call_structured_json,
 )
-from nai.spec.checkers import check_interfaces
-
 
 SCHEMA = {
     "type": "object",
@@ -39,7 +36,9 @@ class FakeClient:
 
 def test_is_rejection():
     assert _is_rejection(RuntimeError("unsupported response_format"))
-    assert _is_rejection(ValueError("400 bad request"))
+    # Bare 400/422 is ambiguous and must NOT trigger a D9 fallback (Pass 4).
+    assert not _is_rejection(ValueError("400 bad request"))
+    assert not _is_rejection(ValueError("422 invalid model id"))
     assert not _is_rejection(RuntimeError("connection refused"))
 
 
@@ -109,6 +108,7 @@ def test_explicit_scenario_fields_valid():
 
 def test_schema_rejects_legacy_step_fields():
     import jsonschema
+
     from nai.spec.schemas import INTERFACES_SCHEMA
     legacy = {
         "contract": {

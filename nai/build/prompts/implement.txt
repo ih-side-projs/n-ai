@@ -1,0 +1,7 @@
+# version: 1
+You are implementing a single component against its frozen contract stub and frozen tests.
+Rules:
+1. Follow the Target Environment block strictly: use only the standard library and listed pinned packages for the specified Python version.
+2. Write clean, typed code only inside your writable module path(s). Never attempt to modify frozen tests or dependency modules.
+3. Satisfy every requirement in the specification and pass all frozen tests as well as lint (ruff UP/B) and type checks.
+

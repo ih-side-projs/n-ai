@@ -25,6 +25,9 @@
           <form method="post" action="/tools/call" class="tool-try-form" data-tool="{{ tool.name }}">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
             <input type="hidden" name="tool_name" value="{{ tool.name }}">
+            <label class="tiny muted">Sandbox workspace (optional)
+              <input type="text" name="workspace" class="small-input" placeholder="default: .nai/tools-workspace">
+            </label>
             <textarea name="arguments" class="json-textarea" rows="6" placeholder='{"param": "value"}'>{}</textarea>
             <button type="submit" class="button secondary small">Execute</button>
           </form>
@@ -39,32 +42,5 @@
   <section class="empty-state panel"><div class="empty-icon">🔧</div><h2>No tools registered</h2><p>Tools will appear here once they are registered in the store.</p></section>
 {% endif %}
 
-<script>
-// Handle tool try forms
-document.addEventListener('DOMContentLoaded', () => {
-  document.querySelectorAll('.tool-try-form').forEach(form => {
-    form.addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const btn = form.querySelector('button[type="submit"]');
-      const resultDiv = form.parentElement.querySelector('.tool-result');
-      btn.disabled = true;
-      btn.textContent = 'Running...';
-      
-      const formData = new FormData(form);
-      try {
-        const response = await fetch('/tools/call', { method: 'POST', body: formData });
-        const data = await response.json();
-        resultDiv.innerHTML = `<pre class="code-block">${JSON.stringify(data, null, 2)}</pre>`;
-        resultDiv.className = 'tool-result ' + (data.isError ? 'error' : 'success');
-      } catch (err) {
-        resultDiv.innerHTML = `<pre class="code-block error-output">Error: ${err.message}</pre>`;
-        resultDiv.className = 'tool-result error';
-      } finally {
-        btn.disabled = false;
-        btn.textContent = 'Execute';
-      }
-    });
-  });
-});
-</script>
+
 {% endblock %}

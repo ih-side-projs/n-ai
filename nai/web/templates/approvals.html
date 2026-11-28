@@ -17,11 +17,21 @@
         <a class="button primary" href="/projects/{{ item.project.id }}/nodes/{{ item.node.id }}">Review</a>
         <form method="post" action="/projects/{{ item.project.id }}/nodes/{{ item.node.id }}/approve" class="inline-form">
           <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <select name="stage" aria-label="Approval stage">
+            <option value="interfaces" {% if item.node.contract %}selected{% endif %}>interfaces</option>
+            <option value="component-spec" {% if not item.node.contract %}selected{% endif %}>component-spec</option>
+            <option value="component-map">component-map</option>
+          </select>
           <input type="text" name="note" placeholder="Approval note (optional)" class="small-input">
           <button type="submit" class="button success small">Approve</button>
         </form>
         <form method="post" action="/projects/{{ item.project.id }}/nodes/{{ item.node.id }}/reject" class="inline-form">
           <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <select name="stage" aria-label="Approval stage">
+            <option value="interfaces" {% if item.node.contract %}selected{% endif %}>interfaces</option>
+            <option value="component-spec" {% if not item.node.contract %}selected{% endif %}>component-spec</option>
+            <option value="component-map">component-map</option>
+          </select>
           <input type="text" name="note" placeholder="Rejection reason" required class="small-input">
           <button type="submit" class="button danger small">Reject</button>
         </form>

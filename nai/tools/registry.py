@@ -10,9 +10,12 @@ One definition, two consumers. (TLS-1)
 from __future__ import annotations
 
 import inspect
+from collections.abc import Callable
 from dataclasses import dataclass
 from functools import wraps
-from typing import Any, Callable, get_type_hints
+from typing import Any, get_type_hints
+
+from .sandbox import Sandbox
 
 
 @dataclass(frozen=True)
@@ -58,9 +61,9 @@ class ToolRegistry:
     - Meta-tools for discovery (list_tools, describe_tool)
     """
     
-    _instance: "ToolRegistry | None" = None
+    _instance: ToolRegistry | None = None
     
-    def __new__(cls) -> "ToolRegistry":
+    def __new__(cls) -> ToolRegistry:
         if cls._instance is None:
             cls._instance = super().__new__(cls)
             cls._instance._tools: dict[str, ToolSpec] = {}
@@ -208,33 +211,58 @@ class ToolRegistry:
             tools = {k: v for k, v in self._tools.items() if k in allowlist}
         return [spec.to_mcp_schema() for spec in tools.values()]
     
-    def call_tool(self, name: str, args: dict, sandbox: "Sandbox | None" = None) -> str:
-        """
-        Call a tool by name with arguments.
-        Returns the tool's result as a string (TLS-7).
-        Errors start with "ERROR:".
+    def call_tool(self, name: str, args: dict, sandbox: Sandbox | None = None) -> str:
+        """Call a tool with per-call sandbox, timeout, output limit and validation.
+
+        Returns a human-readable string; errors start with "ERROR:" (TLS-7).
         """
         spec = self._tools.get(name)
         if not spec:
             return f"ERROR: Unknown tool: {name}"
-        
-        # Validate arguments against schema (basic validation)
+
         try:
-            # Check required params
-            required = spec.params_schema.get("required", [])
-            for req in required:
+            from pathlib import Path as _Path
+
+            from .sandbox import _current_sandbox, get_current_sandbox
+
+            # Validate arguments against the JSON Schema generated from type hints.
+            props = spec.params_schema.get("properties", {})
+            for req in spec.params_schema.get("required", []):
                 if req not in args:
                     return f"ERROR: Missing required parameter: {req}"
-            
-            # Call the tool function
-            result = spec.fn(**args)
-            
-            # Ensure result is string (TLS-7)
+            for key in args:
+                if key not in props:
+                    return f"ERROR: Unexpected parameter: {key}"
+            for key, schema in props.items():
+                if key not in args:
+                    continue
+                value = args[key]
+                typ = schema.get("type")
+                if typ == "string" and not isinstance(value, str):
+                    return f"ERROR: Parameter {key} must be a string"
+                if typ == "integer" and (isinstance(value, bool) or not isinstance(value, int)):
+                    return f"ERROR: Parameter {key} must be an integer"
+                if typ == "number" and (isinstance(value, bool) or not isinstance(value, (int, float))):
+                    return f"ERROR: Parameter {key} must be a number"
+                if typ == "boolean" and not isinstance(value, bool):
+                    return f"ERROR: Parameter {key} must be a boolean"
+                if typ == "array" and not isinstance(value, list):
+                    return f"ERROR: Parameter {key} must be an array"
+                if "enum" in schema and value not in schema["enum"]:
+                    return f"ERROR: Parameter {key} must be one of {schema['enum']}"
+
+            sb = sandbox or get_current_sandbox() or Sandbox(_Path.cwd())
+            token = _current_sandbox.set(sb)
+            try:
+                if spec.timeout_seconds and spec.timeout_seconds > 0:
+                    result = sb.run_with_timeout(spec.fn, args=(), kwargs=args, timeout=spec.timeout_seconds)
+                else:
+                    result = spec.fn(**args)
+            finally:
+                _current_sandbox.reset(token)
             if not isinstance(result, str):
                 result = str(result)
-            
-            return result
-            
+            return sb.limit_output(result)
         except Exception as e:
             return f"ERROR: {type(e).__name__}: {e}"
 
@@ -338,7 +366,7 @@ def _python_type_to_json_schema(py_type: Any) -> dict:
         return {"type": "null"}
     
     # Handle Optional[X] -> X | null
-    from typing import Optional, Union, get_origin, get_args
+    from typing import Union, get_args, get_origin
     origin = get_origin(py_type)
     args = get_args(py_type)
     

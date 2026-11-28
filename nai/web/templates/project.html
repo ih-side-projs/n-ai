@@ -5,8 +5,81 @@
 <div class="breadcrumbs"><a href="/">Projects</a><span>/</span>{{ project.name }}</div>
 <div class="page-heading">
   <div><p class="eyebrow">PROJECT OVERVIEW</p><h1>{{ project.name }}</h1><p class="muted">{{ project.id }} · {{ project.status }}</p></div>
+  <span class="phase-badge phase-{{ project.phase }}">{{ project.phase|capitalize }}</span>
   <span class="status status-{{ project.status }}">{{ project.status }}</span>
 </div>
+<nav class="phase-tabs" aria-label="Workflow phase">
+  {% if project.info_gathering %}
+  <a href="/projects/{{ project.id }}?phase=info_gathering" class="phase-tab {% if selected_phase == 'info_gathering' %}active{% endif %}">Info Gathering</a>
+  {% endif %}
+  <a href="/projects/{{ project.id }}?phase=all" class="phase-tab {% if selected_phase == 'all' %}active{% endif %}">All <span class="count-pill">{{ project.total }}</span></a>
+  <a href="/projects/{{ project.id }}?phase=design" class="phase-tab {% if selected_phase == 'design' %}active{% endif %}">Design <span class="count-pill">{{ project.design_count }}</span></a>
+  <a href="/projects/{{ project.id }}?phase=implementation" class="phase-tab {% if selected_phase == 'implementation' %}active{% endif %}">Implementation <span class="count-pill">{{ project.implementation_count }}</span></a>
+</nav>
+{% if project.info_gathering %}
+<section class="panel info-gathering-panel">
+  {% set intake = project.settings.get('intake', {}) %}
+  <div class="section-heading"><div><h2>Info Gathering</h2>
+    <p class="muted">The model asks focused questions before specification starts. You can force design at any time.</p>
+  </div></div>
+  {% if project.settings.get('intake_readiness_summary') %}<p>{{ project.settings.intake_readiness_summary }}</p>{% endif %}
+  <dl class="compact-dl intake-fields">
+    {% for key, value in intake.items() if value %}
+    <div><dt>{{ key|replace('_', ' ')|capitalize }}</dt><dd>{{ value }}</dd></div>
+    {% endfor %}
+  </dl>
+
+  {% set questions = project.settings.get('intake_questions') or [] %}
+  {% set answers = intake.get('answers', {}) %}
+  {% if questions and not project.settings.get('intake_waiting') %}
+  <section class="intake-history">
+    <h3>Questions and answers</h3>
+    <p class="tiny muted">Submitted. Waiting for the model's next question or its decision to start design.</p>
+    <dl class="compact-dl">
+      {% for q in questions %}
+      <div><dt>{{ q.question }}</dt><dd>{{ answers.get(q.id, '—') }}</dd></div>
+      {% endfor %}
+    </dl>
+  </section>
+  {% elif questions %}
+  <form method="post" action="/projects/{{ project.id }}/intake/answers" class="intake-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <h3>Answer these questions</h3>
+    {% for q in questions %}
+    <label><strong>{{ q.question }}</strong>
+      {% if q.why %}<span class="tiny muted">{{ q.why }}</span>{% endif %}
+      <textarea name="q_{{ q.id }}" rows="3" placeholder="Your answer">{{ answers.get(q.id, '') }}</textarea>
+    </label>
+    {% endfor %}
+    <button type="submit" class="button primary">Submit answers</button>
+  </form>
+  {% else %}
+  <p class="muted">Waiting for the model's first set of questions. Refresh in a moment.</p>
+  {% endif %}
+
+  <form method="post" action="/projects/{{ project.id }}/intake/begin" class="inline-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <button type="submit" class="button secondary">Begin design / spec-ing now</button>
+  </form>
+</section>
+{% endif %}
+<section class="panel next-step-panel">
+  <p class="eyebrow">NEXT STEP</p>
+  <h2>{{ project.next_step.title }}</h2>
+  <p>{{ project.next_step.body }}</p>
+  {% if project.next_step.href %}<a class="button primary" href="{{ project.next_step.href }}">{{ project.next_step.label }}</a>{% endif %}
+</section>
+{% if selected_phase == 'design' %}
+<div class="phase-banner phase-banner-design">
+  <strong>Design phase</strong> — you are iterating on requirements, specifications and contracts.
+  Review and approve each level before implementation continues. Changes here may mark downstream nodes stale.
+</div>
+{% elif selected_phase == 'implementation' %}
+<div class="phase-banner phase-banner-implementation">
+  <strong>Implementation phase</strong> — code, tests and integration are being produced and verified.
+  Toggle to Design at any time; the two phases may overlap.
+</div>
+{% endif %}
 <section class="summary-grid">
   <article class="panel metric-card"><span class="metric-label">Completion</span><strong class="metric-value">{{ project.percent_done }}%</strong><div class="progress-line" role="progressbar" aria-label="Project completion" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{ project.percent_done }}"><span style="width: {{ project.percent_done }}%"></span></div><span class="tiny muted">{{ project.node_counts.get('done', 0) }} of {{ project.node_count }} nodes done</span></article>
   <article class="panel metric-card"><span class="metric-label">Node status</span><strong class="metric-value">{{ project.node_count }}</strong><span class="tiny muted">{{ project.node_counts.get('running', 0) }} running · {{ project.node_counts.get('failed', 0) }} failed</span></article>
@@ -21,13 +94,13 @@
   <aside class="panel">
     <h2>Runtime</h2>
     {% if project.current_job %}<p><span class="status status-running">running</span> {{ project.current_job.kind }}</p><p class="muted tiny">{{ project.current_job.id }}</p>{% else %}<p class="muted">No current job is recorded.</p>{% endif %}
-    <dl class="compact-dl"><div><dt>Jobs</dt><dd>{{ project.job_count }}</dd></div><div><dt>Last activity</dt><dd>{% if project.last_activity %}{{ project.last_activity.time }}{% else %}—{% endif %}</dd></div><div><dt>Workspace</dt><dd class="path-text">{{ project.workspace_path }}</dd></div></dl>
-    <div class="link-stack"><a href="/projects/{{ project.id }}/logs">Live log →</a><a href="/projects/{{ project.id }}/metrics">Metrics →</a><a href="/projects/{{ project.id }}/artifacts">Artifacts →</a></div>
+    <dl class="compact-dl"><div><dt>Jobs</dt><dd>{{ project.job_count }}</dd></div><div><dt>Last activity</dt><dd>{% if project.last_activity %}{{ project.last_activity.time }}{% else %}—{% endif %}</dd></div><div><dt>Output dir</dt><dd class="path-text">{{ project.output_root or '—' }}</dd></div><div><dt>Project root</dt><dd class="path-text">{{ project.workspace_path }}</dd></div></dl>
+    <div class="link-stack"><a href="/projects/{{ project.id }}/logs">Live log →</a><a href="/projects/{{ project.id }}/metrics">Metrics →</a><a href="/projects/{{ project.id }}/artifacts">Artifacts →</a><a href="/projects/{{ project.id }}/settings">Settings →</a></div>
     <h2>Controls</h2>
     <div class="button-group">
-      <form method="post" action="/projects/{{ project.id }}/control/pause" class="inline-form"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit" class="button secondary" {% if runner.status == 'paused' %}disabled{% endif %}>Pause</button></form>
-      <form method="post" action="/projects/{{ project.id }}/control/resume" class="inline-form"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit" class="button secondary" {% if runner.status != 'paused' %}disabled{% endif %}>Resume</button></form>
-      <form method="post" action="/projects/{{ project.id }}/control/cancel" class="inline-form" onsubmit="return confirm('Cancel all work on this project?')"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit" class="button danger">Cancel</button></form>
+      <form method="post" action="/projects/{{ project.id }}/control/pause" class="inline-form control-form"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit" class="button secondary" {% if project.status == 'paused' %}disabled{% endif %}>Pause</button></form>
+      <form method="post" action="/projects/{{ project.id }}/control/resume" class="inline-form control-form"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit" class="button secondary" {% if project.status != 'paused' %}disabled{% endif %}>Resume</button></form>
+      <form method="post" action="/projects/{{ project.id }}/control/cancel" class="inline-form control-form" data-confirm="Cancel all work on this project?"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit" class="button danger">Cancel</button></form>
     </div>
   </aside>
 </div>

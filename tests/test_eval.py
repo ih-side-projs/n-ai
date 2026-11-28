@@ -3,12 +3,10 @@
 import tempfile
 from pathlib import Path
 
-import pytest
-
+from nai.eval.benchmarks import BenchmarkSpec, BenchmarkSuite, _parse_benchmark_spec, load_benchmark_suite
 from nai.eval.harness import BenchmarkHarness, BenchmarkResult
-from nai.eval.benchmarks import BenchmarkSpec, BenchmarkSuite, load_benchmark_suite, _parse_benchmark_spec
+from nai.eval.reports import generate_report
 from nai.eval.stub_server import StubModelServer, StubServerConfig
-from nai.eval.reports import BenchmarkReport, generate_report, write_report
 
 
 class TestBenchmarkSpec:
@@ -81,7 +79,7 @@ class TestStubModelServer:
             "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
         })
         
-        app = server.create_app()
+        server.create_app()
         assert len(server.scripted_responses) == 1
     
     def test_call_history(self):

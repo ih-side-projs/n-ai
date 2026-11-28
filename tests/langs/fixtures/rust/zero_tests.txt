@@ -1,0 +1,8 @@
+   Compiling demo v0.1.0 (/tmp/rustcap/crates/demo)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.16s
+     Running tests/demo_test.rs (target/debug/deps/demo_test-e787b338f5cbbb8b)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+

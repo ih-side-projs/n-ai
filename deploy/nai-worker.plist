@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  launchd user agent for a nai worker (macOS).
+
+  Install:
+    cp deploy/nai-worker.plist ~/Library/LaunchAgents/local.nai.worker.plist
+    # edit the three /path/to/... values below, then:
+    launchctl load -w ~/Library/LaunchAgents/local.nai.worker.plist
+
+  The worker only runs recipes from worker.toml; it never receives a
+  model-supplied command.  Keep worker.toml at mode 0600: it holds the token.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>local.nai.worker</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/path/to/nai/.venv/bin/nai-worker</string>
+    <string>run</string>
+    <string>--config</string><string>/Users/YOU/.nai-worker/worker.toml</string>
+  </array>
+  <key>WorkingDirectory</key><string>/Users/YOU</string>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key><false/>
+  </dict>
+  <key>ProcessType</key><string>Background</string>
+  <key>StandardOutPath</key><string>/Users/YOU/.nai-worker/worker.log</string>
+  <key>StandardErrorPath</key><string>/Users/YOU/.nai-worker/worker.log</string>
+</dict>
+</plist>

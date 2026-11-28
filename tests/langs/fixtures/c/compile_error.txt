@@ -1,0 +1,9 @@
+[ 25%] Building C object CMakeFiles/adder.dir/src/adder/adder.c.o
+/tmp/ccap/src/adder/adder.c: In function ‘adder_add’:
+/tmp/ccap/src/adder/adder.c:5:16: error: ‘missing’ undeclared (first use in this function)
+    5 |     return a + missing;
+      |                ^~~~~~~
+/tmp/ccap/src/adder/adder.c:5:16: note: each undeclared identifier is reported only once for each function it appears in
+gmake[2]: *** [CMakeFiles/adder.dir/build.make:79: CMakeFiles/adder.dir/src/adder/adder.c.o] Error 1
+gmake[1]: *** [CMakeFiles/Makefile2:1014: CMakeFiles/adder.dir/all] Error 2
+gmake: *** [Makefile:101: all] Error 2

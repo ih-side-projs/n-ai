@@ -1,4 +1,4 @@
-# version: 1
+# version: 2
 You are designing the interface contract for a decomposed system.
 
 Input:
@@ -32,4 +32,6 @@ Rules:
 6. Every entity field produced by a component must be consumed by another component or be an external output.
 7. No dependency cycles among components.
 8. Component names: lowercase-hyphenated. Entity names: PascalCase. Function names: snake_case.
-9. Return ONLY the JSON object, no extra text.
+9. Set `language` to exactly one id from the Supported Languages block. One language per project; never invent or substitute a language.
+10. Set `platform` on every component: `any` (default), `linux` or `macos`. Isolate platform-specific code in leaf components and keep logic portable: a component that is `any` or `linux` must not consume a `macos` component.
+11. Return ONLY the JSON object, no extra text.

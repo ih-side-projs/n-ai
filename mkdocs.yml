@@ -37,6 +37,8 @@ nav:
       - Configuration: configuration.md
       - CLI reference: cli-reference.md
       - API reference: api-reference.md
+      - Workflow phases: workflow-phases.md
+      - Service / daemon: service.md
       - Testing: testing.md
   - Subsystems:
       - Overview: subsystems/index.md
@@ -48,6 +50,9 @@ nav:
       - Tools: subsystems/tools.md
       - Web: subsystems/web.md
       - Evaluation: subsystems/evaluation.md
+      - Languages: subsystems/languages.md
+      - Execution: subsystems/execution.md
+      - Remote workers: subsystems/remote-workers.md
   - Reference:
       - Overall specification: specification.md
       - Troubleshooting: troubleshooting.md

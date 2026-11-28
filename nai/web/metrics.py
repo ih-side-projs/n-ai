@@ -114,7 +114,7 @@ def build_project_metrics(store, project: dict[str, Any]) -> dict[str, Any]:
     for bucket in by_model.values():
         bucket["wall_seconds"] = round(bucket["wall_seconds"], 3)
         bucket["swap_seconds"] = round(bucket["swap_seconds"], 3)
-    for kind, bucket in by_kind.items():
+    for _kind, bucket in by_kind.items():
         bucket["success_rate"] = round(bucket["succeeded"] / bucket["total"], 4) if bucket["total"] else None
 
     return {

@@ -1,8 +1,7 @@
 """v1 coder-agent, consult-threads, session-state, orchestrator-loop requirements (R/E ids per component) on ModelClient."""
-import json
 
 import pytest
-from tests.core.conftest import make_client
+
 from nai import promptstore, session
 from nai.coder import Coder
 from nai.consult import ConsultThreads
@@ -10,6 +9,7 @@ from nai.orchestrator import Orchestrator
 from nai.policy import JobContext, PathPolicy
 from nai.testing.stub_server import StubServer, call, reply
 from nai.workspace import Workspace
+from tests.core.conftest import make_client
 
 
 def W(tmp_path, **kw):
@@ -33,7 +33,7 @@ def test_coder_R1_R2_tools_and_first_messages(tmp_path):
         c.run("task", ["have.py", "new.py", "../../etc/passwd"])
         c2 = Coder(make_client(s), ws, 5, allow_bash=True)
         c2.run("t", [])
-    r1, r1b, r2 = s.on("coder")[0], s.on("coder")[1], s.on("coder")[2]
+    r1, r1b, _r2 = s.on("coder")[0], s.on("coder")[1], s.on("coder")[2]
     assert [t["function"]["name"] for t in r1["tools"]] == ["read_file", "write_file", "edit_file", "list_files"]
     assert "run_command" in [t["function"]["name"] for t in s.on("coder")[2]["tools"]]
     assert r1["messages"][0]["content"] == promptstore.get("coder_system").text
@@ -221,7 +221,8 @@ def test_orch_R4_nudges_then_blocked_and_reset(tmp_path):
 def test_orch_R5_handle_errors(tmp_path):
     with StubServer() as s:
         o, ws = orch_for(tmp_path, s)
-        h = lambda name, args: o.handle({"id": "1", "function": {"name": name, "arguments": args}})
+        def h(name, args):
+            return o.handle({"id": "1", "function": {"name": name, "arguments": args}})
         assert h("read_file", "[1]") == "ERROR: tool arguments were not a valid JSON object; retry"
         assert h("finish", '{"nope": 1}').startswith("ERROR: bad arguments for finish:")
         assert h("whatever", "{}") == "ERROR: unknown tool 'whatever'"                  # E3

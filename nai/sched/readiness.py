@@ -48,20 +48,37 @@ def contract_approved(store, parent_id: str | None, cache: dict) -> bool:
     return cache[parent_id]
 
 
-def promote_ready(store, nodes: list[dict], *, require_contract: bool = True) -> list[str]:
-    """Move every `approved` node whose dependencies are done and whose parent contract is approved to `ready`."""
+def promote_ready(store, nodes: list[dict], *, require_contract: bool = True,
+                  allow_test_authoring: bool = True) -> list[str]:
+    """Move eligible `approved` nodes to `ready` (amended SCH-4).
+
+    Normally every dependency must be `done`. With ``allow_test_authoring``
+    (default True) a node whose dependencies are not failed/escalated/stale but
+    not yet done is also promoted, so BLD-8 can batch ``author_tests`` ahead of
+    implementation. The build plugin still gates ``implement`` on all
+    dependencies being ``done`` (``_deps_done``), so no code is written early.
+    """
     by_id = {n["id"]: n for n in nodes}
     cache: dict = {}
     promoted = []
     for n in nodes:
         if n.get("status") != "approved":
             continue
-        if any(by_id.get(d, {}).get("status") != "done" for d in dep_ids(n)):
+        deps = [by_id.get(d, {}).get("status", "missing") for d in dep_ids(n)]
+        all_done = all(s == "done" for s in deps)
+        ready_for_tests = (
+            allow_test_authoring
+            and bool(deps)
+            and all(s not in ("failed", "escalated", "stale", "blocked", "missing") for s in deps)
+        )
+        if not (all_done or ready_for_tests):
             continue
         if require_contract and not contract_approved(store, n.get("parent_id"), cache):
             continue
+        note = ("dependencies done and parent contract approved" if all_done
+                else "test authoring batching: dependencies healthy (SCH-4/BLD-8)")
         try:
-            store.transition_node_status(n["id"], "ready", note="dependencies done and parent contract approved")
+            store.transition_node_status(n["id"], "ready", note=note)
         except Exception as e:
             if not is_invalid_transition(e):
                 raise

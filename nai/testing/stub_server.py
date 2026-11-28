@@ -50,7 +50,7 @@ class StubServer:
     def url(self) -> str:
         return f"http://127.0.0.1:{self._httpd.server_address[1]}/v1"
 
-    def start(self) -> "StubServer":
+    def start(self) -> StubServer:
         srv = self
 
         class H(BaseHTTPRequestHandler):

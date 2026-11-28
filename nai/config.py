@@ -58,7 +58,7 @@ class SizeLimits:
     candidates_nonroot: int = 1
 
     @classmethod
-    def from_dict(cls, d: dict) -> "SizeLimits":
+    def from_dict(cls, d: dict) -> SizeLimits:
         known = {k: v for k, v in d.items() if k in cls.__dataclass_fields__}
         return cls(**known)
 

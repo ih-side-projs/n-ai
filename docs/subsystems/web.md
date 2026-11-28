@@ -25,18 +25,40 @@ Open <http://127.0.0.1:8080>. OpenAPI docs are at `/api/docs`.
 | `/projects/{id}/nodes/{nid}/edit` | Spec editor plus unified diff against last approval |
 | `/approvals` | Pending approvals with approve/reject forms |
 | `/escalations` | Escalated and failed nodes with retry / mark-stale |
-| `/tools` | Registered tool catalog with schemas and try-it forms |
-| `/models` | Model profiles, `/v1/models` + `/running` status, smoke test |
+| `/tools` | Registered tool catalog with schemas and working try-it forms (executes tools in a sandbox) |
+| `/service` | Supervisor status, child restart, nai job submission/cancel, logs |
+| `/projects/{id}/settings` | X9 limits, token budget, test commands, backup location, target language |
+| `/models` | Model profiles (editable reasoner/coder ids), `/v1/models` + `/running` status, smoke test |
 | `/projects/{id}/logs` | Stored events and live SSE stream |
 | `/projects/{id}/metrics` | Tokens, wall time, success rate, retry stats, daily trend |
 | `/projects/{id}/artifacts` | Registered artifacts and safe workspace browser |
 
 ## Controls and approvals
 
-- Approve/reject node specs (records an approval, transitions status).
+- Create projects through the New Project modal: large description plus optional
+  language, interface type and product/engineering guardrails, or upload an existing
+  Markdown/text spec (which seeds the root spec and skips Info Gathering). New
+  projects enter Info Gathering, where the model asks questions and the owner can
+  force design; forcing with answers enqueues a final refinement job first.
+  Submitted intake answers are displayed read-only, and each project page has a
+  Next step panel with a direct link to the right follow-up screen.
+- Reasoner/coder model ids are chosen from the live llama-swap model catalogue,
+  with a fallback option for a configured id that is not currently listed.
+- Approve/reject artifacts where they are displayed: component map, specification,
+  and contract. Each section posts its own fixed approval stage, so there is no
+  ambiguous stage dropdown. The Actions panel is for retry/re-run/mark-stale.
 - Retry failed nodes, re-run a stage, mark a node stale.
 - Pause, resume, cancel a project or job, reorder node priorities.
+- Archive/restore projects; archived projects are hidden by default and visible via
+  `?show_archived=1` or the "Show archived" toggle.
+- A project-wide cancel sets status to `cancelled` so it no longer appears as Active.
+- Node-page sections use capped heights with independent internal scrolling, so
+  the page stays compact while long specs, contracts, traceability tables, job
+  histories, and artifact lists remain readable.
 - All state-changing routes are POST-only and enqueue commands where appropriate.
+- Dashboard POST forms are sent through `fetch()` with `X-Requested-With: fetch`;
+  this allows browsers/privacy extensions that emit `Origin: null` while still
+  blocking cross-origin HTML forms and non-CORS fetch requests.
 
 ## Editing with diff
 
@@ -47,7 +69,8 @@ Saving recomputes project hashes and records a `node.spec_edited` event.
 ## Security (WEB-13 / WEB-14)
 
 - CSRF token issued as a cookie and required in form/header for all POSTs.
-- Same-origin check on state-changing requests.
+- Same-origin check uses a fixed host allowlist (loopback plus `NAI_WEB_ALLOWED_HOSTS`); `Host`/`X-Forwarded-Host` are never trusted.
+- Non-loopback binds require `NAI_WEB_TOKEN`.
 - Optional bearer token via `NAI_WEB_TOKEN` (header or cookie).
 - Strict Content-Security-Policy, `X-Frame-Options: DENY`, no external CDN assets.
 - Workspace file browser rejects absolute paths, `..`, hidden files and symlinks.

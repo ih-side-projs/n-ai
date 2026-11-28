@@ -10,7 +10,6 @@ import pytest
 from fake_store import FakeStore
 from sched_helpers import chat_handler, make_node, make_runner, noop
 
-from nai.sched import JobResult
 from nai.testing.stub_server import StubServer, reply
 
 HAVE_REAL = importlib.util.find_spec("nai.store") is not None

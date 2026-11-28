@@ -1,9 +1,26 @@
 """JSON schemas for SS-SPEC stage outputs (X1)."""
 from __future__ import annotations
+
 import json
 from pathlib import Path
 from typing import Any
+
+from ..langs import registry as _language_registry
+from ..langs import support as _language_support
+from .platforms import PLATFORMS
+
 _SCHEMAS_DIR = Path(__file__).resolve().parent / "schemas"
+
+
+def supported_language_ids() -> list[str]:
+    """Language ids the contract schema accepts, derived from the registry."""
+    ids = _language_support.supported_languages() or _language_registry.supported()
+    return ids or [_language_registry.DEFAULT_LANGUAGE]
+
+
+SUPPORTED_LANGUAGES = supported_language_ids()
+
+
 def load_schema(name: str) -> dict[str, Any]:
     path = _SCHEMAS_DIR / f"{name}.json"
     if not path.is_file():
@@ -75,6 +92,12 @@ INTERFACES_SCHEMA = {
             "required": ["entities", "components", "scenarios"],
             "additionalProperties": False,
             "properties": {
+                "language": {
+                    "type": "string",
+                    "enum": SUPPORTED_LANGUAGES,
+                    "default": "python",
+                    "description": "Project language id (one per project); generated from the adapter registry",
+                },
                 "entities": {"type": "array", "items": {
                     "type": "object", "required": ["name", "fields"],
                     "additionalProperties": False, "properties": {
@@ -92,6 +115,12 @@ INTERFACES_SCHEMA = {
                     "additionalProperties": False, "properties": {
                         "name": {"type": "string", "pattern": "^[a-z][a-z0-9-]*$"},
                         "description": {"type": "string"},
+                        "platform": {
+                            "type": "string",
+                            "enum": list(PLATFORMS),
+                            "default": "any",
+                            "description": "any|linux|macos; isolate platform-specific code in leaf components",
+                        },
                         "provides": {"type": "array", "items": {
                             "type": "object", "required": ["name", "signature"],
                             "additionalProperties": False, "properties": {
@@ -202,7 +231,45 @@ CLARIFY_SCHEMA = {
                 "category": {"type": "string", "enum": ["language", "dependencies", "scope", "interfaces", "nonfunctional", "other"]}
             }}}}
 }
+INTAKE_SCHEMA = {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "IntakeOutput",
+    "type": "object",
+    "required": ["ready_for_design", "questions", "readiness_summary", "refined_brief", "guardrails"],
+    "additionalProperties": False,
+    "properties": {
+        "ready_for_design": {"type": "boolean"},
+        "questions": {
+            "type": "array", "maxItems": 5, "items": {
+                "type": "object", "required": ["id", "question", "why"], "additionalProperties": False,
+                "properties": {
+                    "id": {"type": "string", "pattern": "^Q[0-9]+$"},
+                    "question": {"type": "string", "minLength": 10},
+                    "why": {"type": "string", "minLength": 5},
+                },
+            },
+        },
+        "readiness_summary": {"type": "string", "minLength": 10},
+        "refined_brief": {"type": "string", "minLength": 20},
+        "guardrails": {
+            "type": "object", "additionalProperties": False,
+            "properties": {
+                "language": {"type": "string"},
+                "interface_type": {"type": "string"},
+                "target_users": {"type": "string"},
+                "core_workflows": {"type": "string"},
+                "non_goals": {"type": "string"},
+                "runtime_deployment": {"type": "string"},
+                "stack_libraries": {"type": "string"},
+                "accessibility_security": {"type": "string"},
+                "testing_expectations": {"type": "string"},
+            },
+        },
+    },
+}
+
 SCHEMAS = {
+    "intake": INTAKE_SCHEMA,
     "decompose": DECOMPOSE_SCHEMA,
     "select_map": SELECT_MAP_SCHEMA,
     "interfaces": INTERFACES_SCHEMA,

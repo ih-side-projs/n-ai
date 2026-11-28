@@ -16,7 +16,7 @@ CALL_TIMEOUT = 120.0   # a handler waiting longer than this means the runner sto
 
 
 class StoreActor:
-    def __init__(self, store, inbox: "queue.Queue"):
+    def __init__(self, store, inbox: queue.Queue):
         self.store, self.inbox = store, inbox
         self.owner = threading.get_ident()
 

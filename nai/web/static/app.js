@@ -75,10 +75,16 @@ document.addEventListener('DOMContentLoaded', () => {
       try {
         const response = await fetch('/tools/call', { method: 'POST', body: formData });
         const data = await response.json();
-        resultDiv.innerHTML = `<pre class="code-block">${escapeHtml(JSON.stringify(data, null, 2))}</pre>`;
+        const pre = document.createElement('pre');
+        pre.className = 'code-block';
+        pre.textContent = JSON.stringify(data, null, 2);
+        resultDiv.replaceChildren(pre);
         resultDiv.className = 'tool-result ' + (data.isError ? 'error' : 'success');
       } catch (err) {
-        resultDiv.innerHTML = `<pre class="code-block error-output">Error: ${err.message}</pre>`;
+        const pre = document.createElement('pre');
+        pre.className = 'code-block error-output';
+        pre.textContent = 'Error: ' + err.message;
+        resultDiv.replaceChildren(pre);
         resultDiv.className = 'tool-result error';
       } finally {
         btn.disabled = false;
@@ -93,12 +99,101 @@ document.addEventListener('DOMContentLoaded', () => {
     return div.innerHTML;
   }
 
-  // Confirmation for destructive actions
-  document.querySelectorAll('form[onsubmit]').forEach(form => {
-    const originalSubmit = form.onsubmit;
-    form.addEventListener('submit', (e) => {
-      if (originalSubmit && !originalSubmit.call(form, e)) {
-        e.preventDefault();
+  // Native dialog handling for the structured new-project form.
+  document.querySelectorAll('[data-open-dialog]').forEach(button => {
+    button.addEventListener('click', () => {
+      const dialog = document.getElementById(button.dataset.openDialog);
+      if (dialog && typeof dialog.showModal === 'function') {
+        dialog.showModal();
+      }
+    });
+  });
+  document.querySelectorAll('[data-close-dialog]').forEach(button => {
+    button.addEventListener('click', () => {
+      const dialog = button.closest('dialog');
+      if (dialog && typeof dialog.close === 'function') {
+        dialog.close();
+      }
+    });
+  });
+
+  // Submit ordinary POST forms through fetch with a custom X-Requested-With
+  // header. This preserves CSRF protection while allowing browsers/privacy
+  // extensions that send `Origin: null` to use the dashboard.
+  document.querySelectorAll('form[method="post"]').forEach(form => {
+    if (form.classList.contains('control-form') || form.classList.contains('tool-try-form')) {
+      return;
+    }
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      if (form.dataset.confirm && !window.confirm(form.dataset.confirm)) {
+        return;
+      }
+      try {
+        const response = await fetch(form.action, {
+          method: 'POST',
+          body: new FormData(form),
+          credentials: 'same-origin',
+          headers: { 'X-Requested-With': 'fetch' }
+        });
+        if (!response.ok) {
+          const type = response.headers.get('content-type') || '';
+          let detail = response.statusText;
+          if (type.includes('json')) {
+            const data = await response.json();
+            detail = data.detail || detail;
+          } else {
+            detail = (await response.text()).slice(0, 300);
+          }
+          window.alert('Request failed: ' + detail);
+          return;
+        }
+        if (response.redirected) {
+          window.location.href = response.url;
+        } else {
+          window.location.reload();
+        }
+      } catch (err) {
+        window.alert('Request failed: ' + err.message);
+      }
+    });
+  });
+
+  // Project control forms return JSON. Submit them via fetch and reload the page
+  // instead of letting the browser navigate to a bare JSON document.
+  document.querySelectorAll('form.control-form').forEach(form => {
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      if (form.dataset.confirm && !window.confirm(form.dataset.confirm)) {
+        return;
+      }
+      const button = form.querySelector('button[type="submit"]');
+      const originalText = button ? button.textContent : '';
+      if (button) {
+        button.disabled = true;
+        button.textContent = 'Working...';
+      }
+      try {
+        const response = await fetch(form.action, {
+          method: 'POST',
+          body: new FormData(form),
+          headers: { 'Accept': 'application/json', 'X-Requested-With': 'fetch' }
+        });
+        if (!response.ok) {
+          let detail = response.statusText;
+          try {
+            const data = await response.json();
+            detail = data.detail || detail;
+          } catch (_) { /* non-JSON error */ }
+          throw new Error(detail);
+        }
+        window.location.reload();
+      } catch (err) {
+        window.alert('Command failed: ' + err.message);
+        if (button) {
+          button.disabled = false;
+          button.textContent = originalText;
+        }
       }
     });
   });

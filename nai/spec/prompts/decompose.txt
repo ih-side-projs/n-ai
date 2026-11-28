@@ -1,4 +1,4 @@
-# version: 1
+# version: 2
 You are decomposing a software project brief into a component map.
 
 Input:
@@ -30,4 +30,5 @@ Rules:
 5. shared_entities: domain entities shared across components, PascalCase names.
 6. external_inputs/outputs: things crossing the system boundary.
 7. Do NOT include implementation details, only the architectural decomposition.
-8. Return ONLY the JSON object, no extra text.
+8. Keep logic portable: if the brief needs OS-specific behaviour, plan a separate leaf component for it instead of mixing platforms into shared components.
+9. Return ONLY the JSON object, no extra text.

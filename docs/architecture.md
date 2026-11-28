@@ -33,6 +33,14 @@
                        ┌───────────────────────────┐
                        │ SS-EVAL (benchmarks)      │
                        └───────────────────────────┘
+
+                       ┌───────────────────────────┐
+                       │ SS-EXEC (local / docker)  │
+                       └───────────────────────────┘
+
+                       ┌───────────────────────────┐
+                       │ SS-REMOTE (worker API)    │
+                       └───────────────────────────┘
 ```
 
 ## Control principle
@@ -40,6 +48,24 @@
 Python owns control flow and state. A model never decides which file to read,
 which job runs next, or whether tests passed. Models are called only for narrow
 jobs with schemas and validation (X1, X2).
+
+## Service supervisor
+
+For unattended operation, `nai service` runs a thin supervisor that spawns and
+watches the existing entry points as child processes — it contains no pipeline
+logic of its own:
+
+```
+nai service start
+├── python -m nai.web --host ... --port ...     (dashboard)
+├── python -m nai run --db ...                  (runner)
+└── python -m nai <args>                        (submitted jobs, on demand)
+    ↑ control: Unix socket .nai/service.sock (JSON lines)
+```
+
+It provides process lifecycle (start/stop/restart with backoff), per-child logs,
+graceful shutdown of process groups, a single-instance lock, and a CLI plus
+interactive shell for submitting new `nai` instances. See [Service](service.md).
 
 ## Lifecycle
 
@@ -67,6 +93,17 @@ jobs with schemas and validation (X1, X2).
 - **X9 Size limits**: configured, not hard-coded; EVAL-4 tunes them.
 - **X10 Prompts**: versioned text files under `nai/spec/prompts/` and
   `nai/build/prompts/`, recorded on each job.
+- **Single execution seam**: every child process goes through `nai/exec`
+  (`LocalTarget` or `DockerTarget`), which scrubs the environment, separates
+  setup (network allowed) from run (network off), applies resource limits,
+  streams capped output and makes cancellation real. See
+  [Command execution](subsystems/execution.md).
+- **Remote is recipe-only**: a `macos` component's build/test steps run on a
+  worker through `nai/remote`, which sends a named recipe from `worker.toml`
+  (never a model-supplied command) with a scrubbed environment. Linux keeps the
+  store, the model calls and result parsing; waiting or losing a worker is an
+  infrastructure event, not a failed attempt. See
+  [Remote workers](subsystems/remote-workers.md).
 
 ## Store ownership
 

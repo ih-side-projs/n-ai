@@ -6,7 +6,9 @@
       <summary class="tree-summary">
         <span class="tree-icon">▸</span>
         <a href="/projects/{{ project_id }}/nodes/{{ node.id }}"><strong>{{ node.name }}</strong></a>
+        <span class="phase-badge phase-{{ node.phase|default('design') }}">{{ node.phase|default('design')|capitalize }}</span>
         <span class="status status-{{ node.status }}">{{ node.status }}</span>
+        {% if node.phase_context %}<span class="tiny muted" title="Shown as context for a descendant">context</span>{% endif %}
         {% if node.subtree_counts %}
         <span class="subtree-counts">
           {% for status, count in node.subtree_counts|dictsort %}<span class="count-pill">{{ status }} <b>{{ count }}</b></span>{% endfor %}

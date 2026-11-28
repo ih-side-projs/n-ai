@@ -9,10 +9,129 @@
 | `nai mcp` | `nai.tools.cli:mcp_main` | MCP server (stdio) |
 | `nai-web` | `nai.web.server:main` | local FastAPI dashboard |
 | `nai-bench` | `nai.eval.cli:bench_main` | benchmark runner |
+| `nai-service` | `nai.service.cli:service_main` | service supervisor control CLI |
+| `nai-doctor` | `nai.doctor:main` | operability self-check (DB, models, output root, toolchains, assets) |
+| `nai-worker` | `nai.remote.worker:worker_main` | remote build/test worker (`init\|run\|doctor`) |
 
 Subcommands are registered through `nai.cli.register_subcommand()`; `python -m nai`
 uses the same dispatcher as the `nai` script. `python devswarm.py` is the original
 v1 entry point.
+
+## `nai doctor` — operability self-check
+
+```bash
+nai doctor                     # probe local toolchains and the model server
+nai doctor --offline           # skip the model-server probe (no network)
+nai doctor --strict            # warnings (models, toolchains) fail the run
+nai doctor --worker mac=~/w    # also probe a worker root's toolchains
+nai doctor --json              # machine-readable, includes "warning"
+nai --doctor                   # v1-flag spelling
+python -m nai.doctor
+```
+
+Checks subsystem imports, CLI subcommand registration, job-handler/planner
+coverage against the real `PlanContext`, artifact kinds, schema artifacts,
+package data (migrations, prompts, templates, knowledge packs and the vendored
+C/C++ headers), a temporary SQLite store migration, the configured database file
+(`NAI_DB_PATH`, read-only, applied vs bundled migrations), the resolved output
+root (dangerous-path and writability guards), model-server reachability
+(`GET <base_url>/models`, reporting the reasoner/coder ids) and the per-language
+toolchains here, in `NAI_DOCKER_IMAGE` or on `--worker` roots. Exits non-zero
+when a check fails; `WARN` lines are advisory unless `--strict` is given. Run it
+first when subsystems pass their own tests but integration behaves unexpectedly,
+and as the deployment gate before starting the service.
+
+## `nai where` / `nai relocate` — project layout
+
+```
+nai where <project> [--db PATH] [--json]
+nai relocate <project> <output-root> [--db PATH] [--force]
+```
+
+`where` resolves a project by id, slug or name and prints its stable slug,
+`output_root`, project root and manifest status. `relocate` verifies every
+tracked file against `.nai-manifest.json`, then moves the project to
+`<output-root>/<slug>` and updates the store. Hand-edited files make
+relocation fail unless `--force` explicitly accepts their current hashes.
+
+New projects are created below an output root (precedence: `--output-dir`,
+`NAI_OUTPUT_ROOT`, project settings, then the default `outputs/` directory next
+to the store). The web form can only choose roots listed in
+`NAI_OUTPUT_ROOTS`. Project files live at `<output-root>/<slug>/`; `.nai/`
+holds only the database, logs, artifacts and snapshots.
+
+## `nai project create` — Store-backed project
+
+```
+nai project create <name> [--brief TEXT|--brief-file FILE] [--output-dir DIR]
+                          [--language ID] [--db PATH] [--json]
+```
+
+`--language` accepts only registered adapters (run `nai languages` for the
+list); one language per project. Omitting it uses `python`.
+
+Creates a project in the store with the deterministic layout
+(`<output-root>/<slug>/`, `.nai-project`, `.nai-manifest.json`). The output
+root follows the same precedence as `where`/`relocate`; `--brief -` reads the
+brief from stdin. Exported projects reconstruct their tree on import:
+`SPEC.md`, `contract.json`, `specs/<node-path>/SPEC.md`, source/test files and
+a fresh manifest.
+
+## `nai languages` — supported languages and toolchains
+
+```
+nai languages [--json] [--no-probe] [--worker NAME=PATH ...]
+```
+
+Prints the languages the registry supports (adapter, knowledge pack and
+toolchain probe), then probes each declared tool (`python3 --version`,
+`pytest --version`, `ruff --version` for Python; `swift --version`,
+`swiftc --version`, `xcodebuild -version` for Swift) on this machine and on every
+named worker root. Worker roots can also come from
+`NAI_LANGUAGE_WORKERS=name=path,name=path`. A worker root's `.venv/bin` and
+`bin` are searched before `PATH`, so a worker checkout's own tools win. The
+command exits non-zero when a language is incomplete or a required tool is
+missing, which makes it usable as a pre-flight check.
+
+## `nai worker` / `nai remote` — remote build/test workers
+
+```
+nai worker add NAME [--capability CAP ...] [--capabilities a,b] [--toolchain NAME=VERSION ...] [--db PATH]
+nai worker list [--json] [--db PATH]
+nai worker revoke NAME_OR_ID [--db PATH]
+
+nai remote serve [--db PATH] [--host 127.0.0.1] [--port 8765] [--snapshots DIR]
+                 [--lease 60] [--certfile PEM --keyfile PEM] [--insecure-lan]
+nai remote status [--json] [--limit N] [--db PATH]
+```
+
+`worker add` prints the bearer token exactly once; only its sha256 digest is
+stored. `remote serve` is the worker API on its own listener: a non-loopback
+bind requires TLS unless `--insecure-lan` is passed explicitly. `remote status`
+summarises workers (online/offline/revoked) and recent tasks. On the worker
+machine, `nai-worker init` writes a `worker.toml` (mode 0600) mapping recipe ids
+to argv templates, `nai-worker doctor` checks the config, toolchain and server
+handshake, and `nai-worker run` claims and runs tasks. See
+[Remote workers](subsystems/remote-workers.md).
+
+## `nai service` — background service
+
+```
+nai service start [--foreground] [--no-web] [--no-runner]
+nai service status [--json]
+nai service stop
+nai service restart [web|runner|job-id]
+nai service logs [web|runner|service|job-id] [-n N]
+nai service exec [--name ID] <nai arguments>
+nai service jobs
+nai service cancel ID
+nai service shell
+```
+
+`start` is detached by default; `--foreground` runs the supervisor in the
+current terminal (use this under systemd/launchd). `exec` submits a new
+`python -m nai <args>` instance as a tracked job. `shell` is an interactive
+submission shell. See [Service / daemon](service.md).
 
 ## `nai` — build from a spec
 
@@ -30,7 +149,7 @@ Key options:
 | `--base-url`, `--api-key` | Local model server |
 | `--reasoner`, `--coder` | Model id overrides |
 | `--ctx`, `--coder-ctx`, `--max-tokens` | Context/token overrides |
-| `--docker IMAGE` | Run commands in a persistent container |
+| `--docker IMAGE` | Run commands in a persistent, hardened container |
 | `--coder-bash` | Give the coder the `run_command` tool |
 | `--test-cmd CMD` | Required verification command (repeatable) |
 | `--no-gate`, `--resume` | Disable verification / resume saved state |

@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from nai import manifest
 from nai.store import ExportImportError, Store
 
 
@@ -72,6 +73,45 @@ def test_import_rejects_unsupported_bundle(tmp_path, store):
     (bad / "manifest.json").write_text(json.dumps({"format": "other", "format_version": 1}))
     with pytest.raises(ExportImportError, match="unsupported"):
         store.import_project(bad)
+
+
+@pytest.mark.parametrize("archive", [True, False])
+def test_import_reconstructs_project_tree(tmp_path, archive):
+    """Answer 3: import rebuilds SPEC.md, contract.json, specs/, src/ and the manifest."""
+    source_db = tmp_path / "source.sqlite3"
+    bundle = tmp_path / ("bundle.zip" if archive else "bundle")
+    with Store(source_db) as source:
+        project = source.create_project("Tree Me", "Brief", output_root=tmp_path / "out")
+        root = source.create_node(
+            project, "tree-me", "system", spec_text="# Tree root\n",
+            contract={"interfaces": [{"name": "tree"}]},
+        )
+        child = source.create_node(
+            project, "worker", "component", parent_id=root,
+            spec_text="# Worker\n", contract={"interfaces": []},
+        )
+        workspace = Path(source.get_project(project)["workspace_path"])
+        source_file = workspace / "src" / "worker.py"
+        source_file.parent.mkdir(parents=True, exist_ok=True)
+        source_file.write_text("VALUE = 1\n", encoding="utf-8")
+        manifest.record(workspace, "src/worker.py", node_id=child, stage="implement")
+        source.export_project(project, bundle)
+
+    with Store(tmp_path / "target.sqlite3") as target:
+        imported = target.import_project(bundle, workspace_path=tmp_path / "imported")
+        project = target.get_project(imported)
+        workspace = Path(project["workspace_path"])
+        assert (workspace / "SPEC.md").read_text(encoding="utf-8") == "# Tree root\n"
+        assert (workspace / "specs" / "worker" / "SPEC.md").read_text(encoding="utf-8") == "# Worker\n"
+        assert (workspace / "contract.json").is_file()
+        assert (workspace / "src" / "worker.py").read_text(encoding="utf-8") == "VALUE = 1\n"
+        files = manifest.read(workspace)
+        assert "SPEC.md" in files
+        assert "specs/worker/SPEC.md" in files
+        assert "src/worker.py" in files
+        assert "contract.json" in files
+        assert files["src/worker.py"]["stage"] == "implement"
+        assert all(item["sha256"] for item in files.values())
 
 
 def test_daily_backup_and_retention(tmp_path):

@@ -34,10 +34,298 @@ jobs:
       - name: Syntax check
         run: python -m compileall -q nai
 
+      - name: Lint (ruff)
+        run: |
+          python -m pip install ruff
+          ruff check nai tests
+
+      - name: Type check (mypy on adapters and remote workers)
+        run: |
+          python -m pip install mypy
+          mypy nai/langs nai/remote nai/doctor.py nai/gitcp.py nai/paths.py
+
+      - name: Operability self-check (offline)
+        run: python -m nai doctor --offline
+
       - name: Test suite
         run: pytest -q
+
+      - name: Language support matrix
+        run: >-
+          pytest -q tests/langs/test_support.py tests/langs/test_knowledge.py
+          tests/e2e/test_language_fixtures.py --tb=short
+
+      - name: Python pipeline end-to-end (stub LLM)
+        run: pytest -q tests/e2e/test_pipeline_python.py --tb=short
+
+      - name: End-to-end integration (stub LLM)
+        run: pytest -q tests/test_end_to_end.py tests/e2e/ --tb=short
 
       - name: Verify schema artifacts are in sync
         run: |
           python -m nai.spec.schemas
           git diff --exit-code nai/spec/schemas/
+
+  swift:
+    name: Swift adapter (real toolchain)
+    runs-on: ubuntu-latest
+    # The Swift adapter's e2e test needs a real toolchain; this job installs one.
+    # Everywhere else the Swift tests either skip (e2e) or use a fake SwiftPM
+    # runner (tests/build/test_swift_pipeline.py), so the main matrix stays green.
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Swift
+        uses: swift-actions/setup-swift@v2
+        with:
+          swift-version: '6.0'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[dev,web,eval]'
+
+      - name: Swift adapter unit tests
+        run: pytest -q tests/langs/test_swift_adapter.py --tb=short
+
+      - name: Swift handler wiring (fake SwiftPM)
+        run: pytest -q tests/build/test_swift_pipeline.py --tb=short
+
+      - name: Swift pipeline end-to-end (stub LLM)
+        run: pytest -q tests/e2e/test_pipeline_swift.py --tb=short
+
+      - name: Swift toolchain probe
+        run: nai languages --json
+
+  typescript:
+    name: TypeScript adapter (real toolchain)
+    runs-on: ubuntu-latest
+    # The e2e test skips without Node/npm; this job installs the pinned Node 20
+    # and then asserts the probe actually found the toolchain, so a broken image
+    # cannot turn the job into a silent skip.
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[dev,web,eval]'
+
+      - name: TypeScript adapter unit tests
+        run: pytest -q tests/langs/test_typescript_adapter.py --tb=short
+
+      - name: Toolchain probe (typescript)
+        run: |
+          nai languages --json > languages.json || true
+          python - <<'PY'
+          import json
+          payload = json.load(open("languages.json"))
+          entry = next(e for e in payload["languages"] if e["language"] == "typescript")
+          assert entry["status"]["supported"] is True, entry["status"]
+          assert entry["probes"]["local"]["ok"] is True, entry["probes"]["local"]
+          PY
+
+      - name: TypeScript pipeline end-to-end (stub LLM)
+        run: pytest -q tests/e2e/test_pipeline_typescript.py --tb=short
+
+  go:
+    name: Go adapter (real toolchain)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[dev,web,eval]'
+
+      - name: Go adapter unit tests
+        run: pytest -q tests/langs/test_golang_adapter.py --tb=short
+
+      - name: Toolchain probe (go)
+        run: |
+          nai languages --json > languages.json || true
+          python - <<'PY'
+          import json
+          payload = json.load(open("languages.json"))
+          entry = next(e for e in payload["languages"] if e["language"] == "go")
+          assert entry["status"]["supported"] is True, entry["status"]
+          assert entry["probes"]["local"]["ok"] is True, entry["probes"]["local"]
+          PY
+
+      - name: Go pipeline end-to-end (stub LLM)
+        run: pytest -q tests/e2e/test_pipeline_go.py --tb=short
+
+  rust:
+    name: Rust adapter (real toolchain)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal --component rustfmt
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[dev,web,eval]'
+
+      - name: Rust adapter unit tests
+        run: pytest -q tests/langs/test_rust_adapter.py --tb=short
+
+      - name: Toolchain probe (rust)
+        run: |
+          nai languages --json > languages.json || true
+          python - <<'PY'
+          import json
+          payload = json.load(open("languages.json"))
+          entry = next(e for e in payload["languages"] if e["language"] == "rust")
+          assert entry["status"]["supported"] is True, entry["status"]
+          assert entry["probes"]["local"]["ok"] is True, entry["probes"]["local"]
+          PY
+
+      - name: Rust pipeline end-to-end (stub LLM)
+        run: pytest -q tests/e2e/test_pipeline_rust.py --tb=short
+
+  c:
+    name: C adapter (real toolchain)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake ninja-build build-essential
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[dev,web,eval]'
+
+      - name: C adapter unit tests
+        run: pytest -q tests/langs/test_c_family_adapter.py --tb=short
+
+      - name: Toolchain probe (c)
+        run: |
+          nai languages --json > languages.json || true
+          python - <<'PY'
+          import json
+          payload = json.load(open("languages.json"))
+          entry = next(e for e in payload["languages"] if e["language"] == "c")
+          assert entry["status"]["supported"] is True, entry["status"]
+          assert entry["probes"]["local"]["ok"] is True, entry["probes"]["local"]
+          PY
+
+      - name: C pipeline end-to-end (stub LLM)
+        run: pytest -q tests/e2e/test_pipeline_c.py --tb=short
+
+  cpp:
+    name: C++ adapter (real toolchain)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake ninja-build g++
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[dev,web,eval]'
+
+      - name: C++ adapter unit tests
+        run: pytest -q tests/langs/test_c_family_adapter.py --tb=short
+
+      - name: Toolchain probe (cpp)
+        run: |
+          nai languages --json > languages.json || true
+          python - <<'PY'
+          import json
+          payload = json.load(open("languages.json"))
+          entry = next(e for e in payload["languages"] if e["language"] == "cpp")
+          assert entry["status"]["supported"] is True, entry["status"]
+          assert entry["probes"]["local"]["ok"] is True, entry["probes"]["local"]
+          PY
+
+      - name: C++ pipeline end-to-end (stub LLM)
+        run: pytest -q tests/e2e/test_pipeline_cpp.py --tb=short
+
+  wheel:
+    name: Wheel smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Build wheel
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build --wheel
+      - name: Install into clean venv and smoke test
+        run: |
+          python -m venv /tmp/nai-wheel-venv
+          /tmp/nai-wheel-venv/bin/pip install dist/*.whl
+          /tmp/nai-wheel-venv/bin/python - <<'PY'
+          from pathlib import Path
+          import nai, nai.store, nai.spec, nai.build, nai.web, nai.eval
+          root = Path(nai.__file__).parent
+          assert list((root / 'store' / 'migrations').glob('*.sql'))
+          assert list((root / 'spec' / 'schemas').glob('*.json'))
+          assert list((root / 'build' / 'prompts').glob('*.txt'))
+          assert list((root / 'langs' / 'knowledge').glob('*/*.md'))
+          assert list((root / 'langs' / 'vendor').glob('*.h'))
+          assert (root / 'web' / 'templates' / 'base.html').exists()
+          from nai.store import Store
+          import tempfile
+          with tempfile.TemporaryDirectory() as d:
+              s = Store(Path(d) / 't.sqlite3'); s.close()
+          print('wheel smoke test OK')
+          PY
+
+      - name: Operability self-check from the installed wheel
+        run: |
+          cd /tmp
+          /tmp/nai-wheel-venv/bin/python -m nai doctor --offline
+          /tmp/nai-wheel-venv/bin/python -m nai languages --no-probe

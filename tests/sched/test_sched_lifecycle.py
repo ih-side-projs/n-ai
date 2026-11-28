@@ -6,12 +6,10 @@ import types
 from datetime import datetime
 
 import pytest
-from fake_store import FakeStore
 from sched_helpers import FakeClock, make_node, make_runner, noop
 
 from nai.sched import JobResult, read_health
 from nai.sched.plugins import load_plugins
-from nai.sched.registry import HandlerRegistry
 
 
 def wait_for(cond, timeout=5.0):
@@ -34,18 +32,20 @@ def test_SCH7_running_jobs_are_requeued_and_run_again_after_a_crash(store, pid, 
     ev = store.events_of("runner.recovered_job")
     assert len(ev) == 1 and ev[0]["job_id"] == j and ev[0]["level"] == "warning"
     assert store.jobs[j]["status"] == "succeeded" and store.jobs[j]["started_at"] != "2026-11-16T00:00:00+00:00"
-    assert store.events_of("runner.started")[0]["data"] == {"requeued_jobs": 1, "orphan_nodes": 0}
+    assert store.events_of("runner.started")[0]["data"] == {"requeued_jobs": 1, "orphan_nodes": 0, "invalid_roots": 0, "reconciled_components": 0}
 
 
-def test_SCH7_orphaned_running_nodes_are_reported_not_touched(store, pid, tmp_path):
+def test_SCH7_orphaned_running_nodes_are_reported_and_repaired(store, pid, tmp_path):
     a, b = make_node(store, pid, "a", "running"), make_node(store, pid, "b", "verifying")
     covered = make_node(store, pid, "c", "running")
     store.create_job(pid, "verify", "coder", node_id=covered)
     r = make_runner(store, None, tmp_path)
     rep = r.recover()
-    assert rep == {"requeued_jobs": 0, "orphan_nodes": 2}
+    assert rep == {"requeued_jobs": 0, "orphan_nodes": 2, "invalid_roots": 0, "reconciled_components": 0}
     assert {e["node_id"] for e in store.events_of("runner.orphan_node")} == {a, b}
-    assert store.get_node(a)["status"] == "running"
+    # Orphans are repaired to `ready` so the planner can re-evaluate them.
+    assert store.get_node(a)["status"] == "ready"
+    assert store.get_node(b)["status"] == "ready"
 
 
 def test_SCH7_recovery_is_idempotent_and_skips_archived_projects(store, pid, tmp_path):
@@ -147,7 +147,7 @@ def test_SCH4_dependent_node_starts_only_after_its_dependency_is_done(store, pid
     root = make_node(store, pid, "root", "draft", kind="component")
     store.add_approval(root, "interfaces", "approved")
     a = make_node(store, pid, "a", "approved", parent_id=root)
-    b = make_node(store, pid, "b", "approved", parent_id=root, depends_on=[a])
+    make_node(store, pid, "b", "approved", parent_id=root, depends_on=[a])
     order = []
 
     def planner(pc):
@@ -349,6 +349,7 @@ def test_X4_transient_retries_are_limited(store, pid, tmp_path):
 
 def test_X4_real_connection_refused_is_recognised_as_transient(store, pid, tmp_path):
     from sched_helpers import chat_handler
+
     from nai.config import Config
     from nai.llm import LLM
     j = store.create_job(pid, "implement", "coder")

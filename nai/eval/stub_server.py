@@ -6,13 +6,10 @@ import asyncio
 import json
 import random
 import time
-from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Any
 from collections import deque
+from dataclasses import dataclass, field
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 

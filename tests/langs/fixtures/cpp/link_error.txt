@@ -1,0 +1,10 @@
+[ 20%] Building CXX object CMakeFiles/adder.dir/src/adder/adder.cpp.o
+[ 40%] Linking CXX static library libadder.a
+[ 40%] Built target adder
+[ 60%] Linking CXX executable adder_test
+/usr/bin/x86_64-linux-gnu-ld.bfd: libadder.a(adder.cpp.o): in function `adder::add(int, int)':
+/tmp/cppcap/src/adder/adder.cpp:8:(.text+0x1d): undefined reference to `missing_symbol()'
+collect2: error: ld returned 1 exit status
+gmake[2]: *** [CMakeFiles/adder_test.dir/build.make:118: adder_test] Error 1
+gmake[1]: *** [CMakeFiles/Makefile2:1046: CMakeFiles/adder_test.dir/all] Error 2
+gmake: *** [Makefile:101: all] Error 2

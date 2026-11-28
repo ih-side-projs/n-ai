@@ -1,4 +1,4 @@
-# version: 1
+# version: 2
 You are writing a detailed component specification from its objective and the interfaces it touches.
 
 Input:
@@ -27,4 +27,5 @@ Rules:
 2. Requirements must be testable (each maps to at least one test case).
 3. Only list dependencies from the approved depends_on.
 4. The interface section summarizes the provides/consumes from the contract.
-5. Return ONLY the JSON object, no extra text.
+5. State the component's platform (`any` unless the contract says otherwise). If it is platform-specific, name the OS API it uses and keep the surrounding logic portable.
+6. Return ONLY the JSON object, no extra text.

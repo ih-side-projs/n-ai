@@ -1,7 +1,7 @@
 """coder-agent: tool-using loop for the coder model (v1 coder-agent, on ModelClient)."""
 from __future__ import annotations
 
-from typing import Callable
+from collections.abc import Callable
 
 from . import promptstore
 from .models import ModelClient

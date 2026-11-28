@@ -1,13 +1,12 @@
 import json
-import re
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
 from nai.store import Store
-from nai.web.app import create_app, render_markdown, _list_project_files, _safe_workspace_path
-from nai.web.models import ModelServerClient, ModelServerError, _extract_running_models
+from nai.web.app import _list_project_files, _safe_workspace_path, create_app, render_markdown
+from nai.web.models import ModelServerClient, _extract_running_models
 
 
 @pytest.fixture
@@ -109,7 +108,7 @@ def test_workspace_file_browser_and_traversal_protection(web_db):
     client = TestClient(create_app(db))
 
     listed = client.get(f"/api/projects/{project_id}/files").json()["files"]
-    assert [entry["path"] for entry in listed] == ["README.md"]
+    assert [entry["path"] for entry in listed] == ["README.md", "SPEC.md"]
     viewed = client.get(f"/projects/{project_id}/files/README.md")
     assert viewed.status_code == 200
     assert "Read me." in viewed.text
@@ -156,7 +155,7 @@ def test_project_files_skips_hidden_paths_and_safe_path_rejects_symlinks(web_db,
     (workspace / "visible.txt").write_text("visible")
     (workspace / ".private").mkdir()
     (workspace / ".private" / "secret.txt").write_text("secret")
-    assert [f["path"] for f in _list_project_files(workspace)] == ["visible.txt"]
+    assert [f["path"] for f in _list_project_files(workspace)] == ["SPEC.md", "visible.txt"]
     with pytest.raises(Exception):
         _safe_workspace_path(workspace, "../outside", allow_hidden=False)
 
@@ -176,6 +175,18 @@ def test_model_server_unconfigured_is_nonfatal():
     assert snapshot["models"] == []
 
 
+def test_model_server_url_normalizes_openai_base_and_llama_swap_roots():
+    client = ModelServerClient("http://127.0.0.1:8080/v1")
+    assert client._url_for("/health") == "http://127.0.0.1:8080/health"
+    assert client._url_for("/running") == "http://127.0.0.1:8080/running"
+    assert client._url_for("/v1/models") == "http://127.0.0.1:8080/v1/models"
+    assert client._url_for("/v1/chat/completions") == "http://127.0.0.1:8080/v1/chat/completions"
+
+    root_client = ModelServerClient("http://127.0.0.1:8080/")
+    assert root_client._url_for("/health") == "http://127.0.0.1:8080/health"
+    assert root_client._url_for("/v1/models") == "http://127.0.0.1:8080/v1/models"
+
+
 def test_missing_database_returns_actionable_503(tmp_path):
     client = TestClient(create_app(tmp_path / "missing.sqlite3"))
     response = client.get("/api/projects")
@@ -183,9 +194,10 @@ def test_missing_database_returns_actionable_503(tmp_path):
     assert "database not found" in response.json()["detail"]
 
 
-def test_model_page_uses_local_server_models_running_and_smoke_test(web_db):
-    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+@pytest.mark.parametrize("base_suffix", ["", "/v1"])
+def test_model_page_uses_local_server_models_running_and_smoke_test(web_db, base_suffix):
     import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
     class Handler(BaseHTTPRequestHandler):
         def _send(self, payload, content_type="application/json"):
@@ -226,11 +238,13 @@ def test_model_page_uses_local_server_models_running_and_smoke_test(web_db):
         with Store(db) as store:
             store.save_model_profile("local-qwen", {"model_id": "model-test", "ctx": 32768, "max_tokens": 2048},
                                      {"model_id": "model-test-coder", "ctx": 32768, "max_tokens": 2048})
-        base_url = f"http://127.0.0.1:{server.server_port}"
+        base_url = f"http://127.0.0.1:{server.server_port}{base_suffix}"
         client = TestClient(create_app(db, llama_swap_url=base_url))
         page = client.get("/models")
         assert page.status_code == 200
         assert "model-test" in page.text
+        assert '<select name="model_id" required>' in page.text
+        assert '<option value="model-test"' in page.text
         snapshot = client.get("/api/models").json()["server"]
         assert snapshot["healthy"] is True
         assert snapshot["loaded_models"][0]["id"] == "model-test"
@@ -258,8 +272,8 @@ def test_runner_status_file_is_exposed_in_json(web_db, tmp_path):
 
 def test_sse_backlog_emits_project_events(web_db):
     import asyncio
-    from nai.web.app import _event_stream
-    from nai.web.app import WebSettings
+
+    from nai.web.app import WebSettings, _event_stream
 
     db, project_id, root_id, job_id, workspace = web_db
 

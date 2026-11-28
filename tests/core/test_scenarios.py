@@ -8,11 +8,11 @@ import signal
 import subprocess
 import sys
 import time
-from pathlib import Path
 
 import pytest
-from tests.core.conftest import ROOT, needs_git
+
 from nai.testing.stub_server import StubServer, call, reply
+from tests.core.conftest import ROOT, needs_git
 
 ENTRY = {"devswarm.py": [sys.executable, str(ROOT / "devswarm.py")], "python -m nai": [sys.executable, "-m", "nai"]}
 

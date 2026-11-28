@@ -7,7 +7,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 _PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
 
@@ -55,6 +54,7 @@ def get_prompt(name: str) -> SpecPrompt:
 
 
 # Prompt name constants for each stage
+INTAKE = "intake"
 DECOMPOSE = "decompose"
 SELECT_MAP = "select_map"
 INTERFACES = "interfaces"
@@ -65,6 +65,7 @@ LINT = "lint"  # code-only, no model
 CLARIFY = "clarify"
 
 ALL_PROMPTS = [
+    INTAKE,
     DECOMPOSE,
     SELECT_MAP,
     INTERFACES,

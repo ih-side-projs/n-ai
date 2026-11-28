@@ -1,0 +1,24 @@
+   Compiling demo v0.1.0 (/tmp/rustcap/crates/demo)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/demo_test.rs (target/debug/deps/demo_test-e787b338f5cbbb8b)
+
+running 1 test
+test r1_normalize_text ... FAILED
+
+failures:
+
+---- r1_normalize_text stdout ----
+
+thread 'r1_normalize_text' panicked at crates/demo/tests/demo_test.rs:3:5:
+assertion `left == right` failed
+  left: "a b"
+ right: "a  b"
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    r1_normalize_text
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p demo --test demo_test`

@@ -3,10 +3,10 @@ from __future__ import annotations
 
 import argparse
 import sys
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
-from . import terminal
+from . import layout, paths, terminal
 from .coder import Coder
 from .config import ConfigError, load_config
 from .llm import LLM, JsonlCallLog, MissingDependency
@@ -28,6 +28,8 @@ def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(prog="nai", description="Build software from a spec using llama-swap models.")
     ap.add_argument("spec", nargs="?", help="Spec file path, or '-' for stdin")
     ap.add_argument("-w", "--workspace", default="./workspace")
+    ap.add_argument("--output-dir", default=None,
+                    help="Base directory for project files (overrides -w; env NAI_OUTPUT_ROOT is used by Store projects)")
     ap.add_argument("--base-url", default=None, help="Server URL (env LLAMA_SWAP_URL; default http://localhost:8080/v1)")
     ap.add_argument("--api-key", default=None, help="API key (env LLAMA_SWAP_KEY; default 'none')")
     ap.add_argument("--reasoner", default=None, help="llama-swap model id of the reasoning model (env REASONER_MODEL; default qwen3.6-reasoning)")
@@ -53,6 +55,7 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--config", metavar="FILE", help="TOML config file (default: $NAI_CONFIG, then ./nai.toml if present)")
     ap.add_argument("--profile", metavar="NAME", help="Model profile from the config file")
     ap.add_argument("--call-log", metavar="FILE", help="Append every model call (full prompt and reply) to this JSONL file")
+    ap.add_argument("--doctor", action="store_true", help="Run integration self-checks and exit")
     return ap
 
 
@@ -62,6 +65,9 @@ def main(argv: list[str] | None = None) -> None:
         sys.exit(SUBCOMMANDS[argv[0]](argv[1:]) or 0)
     ap = build_parser()
     a = ap.parse_args(argv)
+    if a.doctor:
+        from .doctor import main as doctor_main
+        sys.exit(doctor_main([]))
     try:
         cfg = load_config(a.config)
         profile = cfg.get_profile(a.profile, reasoner=a.reasoner, coder=a.coder, ctx=a.ctx, coder_ctx=a.coder_ctx,
@@ -85,7 +91,12 @@ def main(argv: list[str] | None = None) -> None:
         ap.error("provide a SPEC file (or --resume)")
 
     client = ModelClient(llm, profile)
-    ws = Workspace(Path(a.workspace), a.cmd_timeout, a.docker, git=not a.no_git, test_cmds=a.test_cmd, gate=not a.no_gate)
+    workspace_root = Path(a.workspace)
+    if a.output_dir and a.spec and a.spec != "-":
+        base = paths.validate_output_root(a.output_dir)
+        workspace_root = layout.project_root(base, layout.slugify(Path(a.spec).stem))
+    ws = Workspace(workspace_root, a.cmd_timeout, a.docker, git=not a.no_git, test_cmds=a.test_cmd, gate=not a.no_gate,
+                   on_note=lambda kind, message: terminal.log("exec", f"{kind}: {message}", "yellow"))
     terminal.set_transcript(ws.root / ".agent" / "transcript.log")
     coder = Coder(client, ws, a.coder_max_steps, a.coder_bash)
     orch = Orchestrator(client, ws, coder, max_steps=a.max_steps)
@@ -94,7 +105,7 @@ def main(argv: list[str] | None = None) -> None:
         orch.load()
     else:
         spec = sys.stdin.read() if a.spec == "-" else Path(a.spec).read_text()
-        (ws.root / "SPEC.md").write_text(spec)  # so agents can pass spec sections via context_files
+        layout.spec_path(ws.root).write_text(spec)  # so agents can pass spec sections via context_files
         if a.spec != "-":  # subsystem specs written next to the main spec (SPEC-<n>.md)
             for sib in Path(a.spec).resolve().parent.glob("SPEC-*.md"):
                 (ws.root / sib.name).write_text(sib.read_text())

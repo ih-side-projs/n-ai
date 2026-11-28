@@ -1,0 +1,11 @@
+- `unimplemented!()` is deliberate in stubs; remove it when implementing.
+- Do not edit any `Cargo.toml`; the adapter regenerates them.
+- `cargo build` failures are BUILD_ERROR; `cargo test` failures are TEST_FAIL.
+- Borrow checker: a `&mut` borrow excludes all other borrows; end the borrow first.
+- `String` vs `&str`: take `&str` parameters, return `String`.
+- Integer overflow panics in debug and wraps in release; use `checked_add`/`saturating_add`.
+- `unwrap()` panics; use `?` or `expect("context")`.
+- `clone()` is cheap-looking but copies; borrow when you can.
+- `for i in 0..v.len()` is unidiomatic; use `for x in &v`.
+- Float comparison: use `f64::EPSILON` or `approx`.
+- Platform: `any`/`linux` crates may not depend on GUI crates (verify fails).

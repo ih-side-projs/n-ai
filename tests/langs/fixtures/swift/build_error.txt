@@ -1,0 +1,11 @@
+Building for debugging...
+[1/3] Write swift-version-6F3B2A1C4D5E6F70.txt
+[2/4] Emitting module TextNormalizer
+[3/4] Compiling TextNormalizer TextNormalizer.swift
+/Users/dev/TinyLibrary/Sources/TextNormalizer/TextNormalizer.swift:4:18: error: value of type '[Substring]' has no member 'join'
+    return text.split(separator: " ").join(separator: " ")
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~^~~~~
+/Users/dev/TinyLibrary/Sources/TextNormalizer/TextNormalizer.swift:4:42: error: cannot convert value of type 'String' to expected argument type 'Character'
+    return text.split(separator: " ").join(separator: " ")
+                                             ^
+error: emit-module command failed with exit code 1 (use -v to see invocation)

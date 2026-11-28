@@ -1,0 +1,31 @@
+   Compiling demo v0.1.0 (/tmp/rustcap/crates/demo)
+warning: unused variable: `value`
+ --> crates/demo/src/lib.rs:1:23
+  |
+1 | pub fn normalize_text(value: &str) -> String {
+  |                       ^^^^^ help: if this is intentional, prefix it with an underscore: `_value`
+  |
+  = note: `#[warn(unused_variables)]` on by default
+
+warning: `demo` (lib) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.12s
+     Running tests/demo_test.rs (target/debug/deps/demo_test-e787b338f5cbbb8b)
+
+running 1 test
+test r1_normalize_text ... FAILED
+
+failures:
+
+---- r1_normalize_text stdout ----
+
+thread 'r1_normalize_text' panicked at crates/demo/src/lib.rs:2:5:
+not implemented
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    r1_normalize_text
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p demo --test demo_test`

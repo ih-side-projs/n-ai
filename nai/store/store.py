@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import hmac
 import json
 import re
 import shutil
@@ -15,10 +16,14 @@ import tempfile
 import threading
 import uuid
 import zipfile
-from datetime import datetime, timezone
+from collections.abc import Iterator, Sequence
+from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
-from typing import Any, Iterator, Sequence
+from typing import Any
 
+from .. import layout, manifest, paths
+from ..langs import registry as language_registry
+from ..langs import support as language_support
 from .errors import (
     DependencyCycleError,
     DependencyError,
@@ -28,21 +33,25 @@ from .errors import (
 )
 from .hashing import canonical_json, content_hash, sha1_text
 
-
 NODE_STATUSES = {
     "draft", "awaiting_approval", "approved", "ready", "running", "verifying",
     "done", "failed", "escalated", "blocked", "stale",
 }
+# Design-stage nodes are not built yet. Rehashing them must not invalidate them
+# into `stale`, which would let the build planner promote them to `ready`.
+HASH_DESIGN_STATUSES = {"draft", "awaiting_approval"}
+PROJECT_STATUSES = {"active", "paused", "done", "cancelled", "archived"}
 NODE_KINDS = {"system", "subsystem", "component", "leaf", "integration"}
 JOB_KINDS = {
-    "decompose", "interfaces", "check_interfaces", "component_spec", "reconcile",
+    "intake", "clarify", "decompose", "select_map", "interfaces", "check_interfaces",
+    "component_spec", "lint", "reconcile",
     "contract_stub", "author_tests", "implement", "verify", "integrate", "diagnose", "review",
 }
 ARTIFACT_KINDS = {"spec", "contract", "code", "test", "output-file", "report", "log"}
 APPROVAL_STAGES = {"component-map", "interfaces", "component-spec", "escalation"}
 COMMAND_ACTIONS = {
     "pause", "resume", "cancel_job", "cancel", "retry_node", "approve", "reject",
-    "rerun_stage", "reorder",
+    "rerun_stage", "reorder", "archive", "unarchive", "answer_intake", "begin_design",
 }
 
 # STO-4. A transition to stale is permitted from every state, including done.
@@ -50,13 +59,13 @@ _ALLOWED_TRANSITIONS: dict[str, set[str]] = {
     "draft": {"awaiting_approval", "stale"},
     "awaiting_approval": {"approved", "stale"},
     "approved": {"ready", "stale"},
-    "ready": {"running", "stale"},
-    "running": {"verifying", "failed", "stale"},
-    "verifying": {"done", "failed", "stale"},
+    "ready": {"running", "blocked", "stale"},
+    "running": {"verifying", "failed", "blocked", "stale"},
+    "verifying": {"done", "failed", "blocked", "stale"},
     "done": {"stale"},
     "failed": {"ready", "escalated", "stale"},
     "escalated": {"ready", "stale"},
-    "blocked": {"stale"},
+    "blocked": {"failed", "ready", "stale"},
     "stale": {"draft", "ready"},
 }
 
@@ -71,12 +80,102 @@ def new_id() -> str:
     return uuid.uuid4().hex[:12]
 
 
+def _json_list(raw: Any) -> list[Any]:
+    """Parse a JSON array column, tolerating NULL and malformed values."""
+    if raw is None:
+        return []
+    if isinstance(raw, (list, tuple)):
+        return list(raw)
+    try:
+        value = json.loads(raw) if isinstance(raw, (str, bytes)) else raw
+    except ValueError:
+        return []
+    return list(value) if isinstance(value, (list, tuple)) else []
+
+
+def _json_dict(raw: Any) -> dict[str, Any]:
+    """Parse a JSON object column, tolerating NULL and malformed values."""
+    if raw is None:
+        return {}
+    if isinstance(raw, dict):
+        return dict(raw)
+    try:
+        value = json.loads(raw) if isinstance(raw, (str, bytes)) else raw
+    except ValueError:
+        return {}
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def _norm_cap(value: Any) -> str:
+    """Capabilities are compared case-insensitively and without padding."""
+    return str(value).strip().lower()
+
+
+def _parse_stamp(value: str | None) -> datetime:
+    if not value:
+        return datetime.now(timezone.utc)
+    parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def _format_stamp(value: datetime) -> str:
+    return value.astimezone(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
+
+
+def _iso_plus(seconds: float, now: str | None = None) -> str:
+    """``now + seconds`` in the store's timestamp format."""
+    return _format_stamp(_parse_stamp(now) + timedelta(seconds=float(seconds)))
+
+
+def _iso_minus(seconds: float, now: str | None = None) -> str:
+    """``now - seconds`` in the store's timestamp format."""
+    return _format_stamp(_parse_stamp(now) - timedelta(seconds=float(seconds)))
+
+
 def _json_object(value: Any, label: str) -> str:
     if value is None:
         value = {}
     if not isinstance(value, dict):
         raise TypeError(f"{label} must be a JSON object")
     return canonical_json(value)
+
+
+def _validated_language(settings: dict[str, Any]) -> str:
+    """Return a supported language id for ``settings['language']``.
+
+    ``None`` means "use the default".  A list is rejected outright: N-AI v1
+    supports exactly one language per project.
+    """
+    raw = settings.get("language")
+    if raw is None:
+        return language_registry.DEFAULT_LANGUAGE
+    if not isinstance(raw, str):
+        raise StoreError(
+            "settings.language must be one language id (one language per project)"
+        )
+    try:
+        return language_support.require_supported(raw)
+    except language_registry.UnknownLanguageError as exc:
+        raise StoreError(str(exc)) from None
+
+
+def _validated_import_settings(raw: Any) -> dict[str, Any]:
+    """Validate a bundle's project settings before import.
+
+    Bundles can carry any language string; importing one must not smuggle an
+    unsupported language past ``create_project``'s check.
+    """
+    try:
+        settings = json.loads(raw) if isinstance(raw, str) and raw else {}
+    except ValueError as exc:
+        raise ExportImportError(f"invalid project settings in bundle: {exc}") from None
+    if not isinstance(settings, dict):
+        raise ExportImportError("invalid project settings in bundle: expected an object")
+    try:
+        settings["language"] = _validated_language(settings)
+    except StoreError as exc:
+        raise ExportImportError(str(exc)) from None
+    return settings
 
 
 def _decode_json(row: dict[str, Any], source: str, target: str) -> None:
@@ -96,6 +195,115 @@ def _safe_filename(value: str) -> str:
     name = Path(value).name
     name = re.sub(r"[^A-Za-z0-9._-]+", "_", name).strip("._")
     return name or "artifact.bin"
+
+
+def _tree_parts(relpath: str) -> tuple[str, ...] | None:
+    """Return safe parts for a project-tree file, or ``None`` for state/unsafe paths."""
+    try:
+        parts = _safe_relative_path(relpath).parts
+    except ExportImportError:
+        return None
+    if not parts or parts[0] in {".nai", ".git"}:
+        return None
+    if parts[0] in {layout.MARKER_NAME, layout.MANIFEST_NAME}:
+        return None
+    return parts
+
+
+def _contract_object(raw: Any) -> dict[str, Any]:
+    """Decode a stored contract JSON column into a plain object."""
+    if isinstance(raw, dict):
+        return raw
+    if not raw:
+        return {}
+    try:
+        value = json.loads(raw)
+    except (TypeError, ValueError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _node_paths(rows: list[dict[str, Any]], slugs: dict[str, str]) -> dict[str, str]:
+    """Map node id -> slug path below the root, using the slugs assigned on import."""
+    by_id = {row["id"]: row for row in rows}
+    cache: dict[str, str] = {}
+
+    def walk(node_id: str) -> str:
+        if node_id in cache:
+            return cache[node_id]
+        row = by_id.get(node_id)
+        if row is None:
+            return ""
+        parent = row.get("parent_id")
+        slug = slugs.get(node_id) or layout.slugify(str(row.get("name") or ""))
+        if not parent:
+            cache[node_id] = ""
+        else:
+            cache[node_id] = layout.node_path([*walk(parent).split("/"), slug])
+        return cache[node_id]
+
+    for node_id in by_id:
+        walk(node_id)
+    return cache
+
+
+def _restore_project_tree(
+    workspace: Path,
+    tables: dict[str, Any],
+    id_maps: dict[str, dict[str, str]],
+    node_slugs: dict[str, str],
+    bundle_manifest: dict[str, Any],
+    bundle: _BundleReader,
+) -> None:
+    """Rebuild the project tree from bundled files and the stored spec/contract rows."""
+    entries: dict[str, dict[str, Any]] = {}
+    for item in bundle_manifest.get("tree_files") or []:
+        if not isinstance(item, dict):
+            continue
+        relpath = str(item.get("path") or "")
+        parts = _tree_parts(relpath)
+        if parts is None:
+            continue
+        data = bundle.read("tree/" + relpath)
+        expected = str(item.get("sha256") or "")
+        if expected and hashlib.sha256(data).hexdigest() != expected:
+            raise ExportImportError(f"tree file hash mismatch: {relpath}")
+        target = paths.resolve_relative(workspace, relpath)
+        paths.write_atomic(target, data, root=workspace)
+        entries[relpath] = {
+            "sha256": hashlib.sha256(data).hexdigest(),
+            "node_id": id_maps["nodes"].get(item.get("node_id")),
+            "stage": item.get("stage"),
+        }
+
+    paths_by_id = _node_paths(list(tables.get("nodes") or []), node_slugs)
+    for row in tables.get("nodes") or []:
+        node_id = row["id"]
+        path = paths_by_id.get(node_id, "")
+        spec_text = str(row.get("spec_text") or "")
+        if spec_text:
+            target = layout.spec_path(workspace, path)
+            paths.write_atomic(target, spec_text, root=workspace)
+            entries[layout.relative_to_root(workspace, target)] = {
+                "sha256": manifest.sha256_text(spec_text),
+                "node_id": id_maps["nodes"].get(node_id),
+                "stage": "spec",
+            }
+        contract = _contract_object(row.get("contract_json"))
+        if contract:
+            text = json.dumps(contract, indent=2, sort_keys=True)
+            targets = [layout.node_dir(workspace, path) / "interfaces.json"]
+            if not row.get("parent_id"):
+                targets.append(layout.contract_path(workspace))
+            for target in targets:
+                paths.write_atomic(target, text, root=workspace)
+                entries[layout.relative_to_root(workspace, target)] = {
+                    "sha256": manifest.sha256_text(text),
+                    "node_id": id_maps["nodes"].get(node_id),
+                    "stage": "contract",
+                }
+
+    manifest.write(workspace, entries)
 
 
 class Store:
@@ -119,9 +327,14 @@ class Store:
         backup_dir: str | Path | None = None,
         backup_keep: int = 7,
         migration_dir: str | Path | None = None,
+        allow_thread_sharing: bool = False,
     ) -> None:
         self.db_path = Path(db_path).expanduser().resolve()
         self.read_only = bool(read_only)
+        #: The worker API serves requests from a thread pool; it opens its own
+        #: connection with this flag and serializes calls behind a lock.  Every
+        #: other user keeps sqlite3's thread-affinity check on.
+        self.allows_thread_sharing = bool(allow_thread_sharing)
         self.backup_dir = Path(backup_dir).expanduser().resolve() if backup_dir else None
         self.backup_keep = int(backup_keep)
         self._backup_lock = threading.RLock()
@@ -137,9 +350,15 @@ class Store:
 
         if self.read_only:
             uri = self.db_path.as_uri() + "?mode=ro"
-            self.conn = sqlite3.connect(uri, uri=True, isolation_level=None, timeout=10)
+            self.conn = sqlite3.connect(
+                uri, uri=True, isolation_level=None, timeout=10,
+                check_same_thread=not self.allows_thread_sharing,
+            )
         else:
-            self.conn = sqlite3.connect(self.db_path, isolation_level=None, timeout=10)
+            self.conn = sqlite3.connect(
+                self.db_path, isolation_level=None, timeout=10,
+                check_same_thread=not self.allows_thread_sharing,
+            )
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA foreign_keys = ON")
         self.conn.execute("PRAGMA busy_timeout = 10000")
@@ -182,7 +401,7 @@ class Store:
         self._backup_thread = threading.Thread(target=run, name="nai-daily-backup", daemon=True)
         self._backup_thread.start()
 
-    def __enter__(self) -> "Store":
+    def __enter__(self) -> Store:
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:
@@ -227,20 +446,108 @@ class Store:
             if version != expected:
                 raise StoreError(f"migration gap: expected {expected:04d}, found {path.name}")
             script = path.read_text(encoding="utf-8")
-            self.conn.execute("BEGIN IMMEDIATE")
+            # A few migrations must rebuild a parent table. SQLite ignores
+            # PRAGMA foreign_keys inside a transaction, so opt out before BEGIN
+            # and restore enforcement afterwards.
+            fk_off = "PRAGMA FOREIGN_KEYS=OFF" in script.upper()
+            if fk_off:
+                self.conn.execute("PRAGMA foreign_keys=OFF")
             try:
+                self.conn.execute("BEGIN IMMEDIATE")
                 self._execute_sql_script(script)
                 self.conn.execute(
                     "INSERT INTO schema_migrations(version, name, applied_at) VALUES (?, ?, ?)",
                     (version, path.name, utc_now()),
                 )
             except Exception:
-                self.conn.rollback()
+                if self.conn.in_transaction:
+                    self.conn.rollback()
                 raise
             else:
                 self.conn.commit()
+            finally:
+                if fk_off:
+                    self.conn.execute("PRAGMA foreign_keys=ON")
             current = version
             expected = current + 1
+        if self.schema_version >= 6:
+            self._backfill_layout()
+
+    def _backfill_layout(self) -> None:
+        """Deterministically fill slug/output_root columns for pre-0006 rows."""
+        if self.read_only:
+            return
+        with self._transaction() as conn:
+            projects = [dict(row) for row in conn.execute(
+                "SELECT id, name, workspace_path, slug, output_root FROM projects ORDER BY created_at, id"
+            ).fetchall()]
+            used: dict[str, set[str]] = {}
+            for project in projects:
+                workspace = Path(project["workspace_path"]).expanduser().resolve()
+                output_root = project.get("output_root") or str(workspace.parent)
+                slug = project.get("slug")
+                taken = used.setdefault(output_root, set())
+                if not slug:
+                    slug = layout.unique_slug(workspace.name or project["name"], taken)
+                    conn.execute(
+                        "UPDATE projects SET slug=?, output_root=? WHERE id=?",
+                        (slug, output_root, project["id"]),
+                    )
+                else:
+                    conn.execute(
+                        "UPDATE projects SET output_root=? WHERE id=? AND output_root IS NULL",
+                        (output_root, project["id"]),
+                    )
+                taken.add(str(slug))
+                project["slug"], project["output_root"] = slug, output_root
+
+            for project in projects:
+                rows = [dict(row) for row in conn.execute(
+                    "SELECT id, parent_id, name, slug FROM nodes WHERE project_id=? ORDER BY created_at, id",
+                    (project["id"],),
+                ).fetchall()]
+                by_parent: dict[str | None, list[dict[str, Any]]] = {}
+                for row in rows:
+                    by_parent.setdefault(row.get("parent_id"), []).append(row)
+                for siblings in by_parent.values():
+                    taken: set[str] = set()
+                    for row in siblings:
+                        slug = row.get("slug") or layout.unique_slug(row["name"], taken)
+                        if not row.get("slug"):
+                            conn.execute("UPDATE nodes SET slug=? WHERE id=?", (slug, row["id"]))
+                        taken.add(str(slug))
+        # Best-effort marker/manifest creation for projects that predate the layout.
+        for project in self.list_projects():
+            workspace = Path(project["workspace_path"]).expanduser()
+            if not workspace.is_dir():
+                continue
+            try:
+                if paths.read_marker(workspace) is None:
+                    paths.write_marker(
+                        workspace, project_id=project["id"],
+                        slug=str(project.get("slug") or layout.slugify(workspace.name)),
+                        name=str(project.get("name") or ""),
+                    )
+                if not layout.manifest_path(workspace).is_file():
+                    manifest.write(workspace, manifest.scan(workspace))
+            except OSError:
+                continue
+
+    def _has_column(self, table: str, column: str) -> bool:
+        return any(row["name"] == column for row in self.conn.execute(f"PRAGMA table_info({table})").fetchall())
+
+    def _node_path_for(self, conn: sqlite3.Connection, node_id: str) -> str:
+        """Slug path below the root (root -> ``""``)."""
+        has_slug = self._has_column("nodes", "slug")
+        select = "SELECT id, parent_id, name, slug FROM nodes WHERE id=?" if has_slug else (
+            "SELECT id, parent_id, name, NULL AS slug FROM nodes WHERE id=?"
+        )
+        parts: list[str] = []
+        row = conn.execute(select, (node_id,)).fetchone()
+        while row is not None and row["parent_id"] is not None:
+            parts.append(str(row["slug"] or layout.slugify(row["name"])))
+            row = conn.execute(select, (row["parent_id"],)).fetchone()
+        return layout.node_path(list(reversed(parts)))
 
     def _execute_sql_script(self, script: str) -> None:
         """Execute a migration without executescript's implicit transaction commit."""
@@ -304,14 +611,21 @@ class Store:
     def list_events(
         self, project_id: str, *, node_id: str | None = None, limit: int = 500
     ) -> list[dict[str, Any]]:
+        """Return the most recent `limit` events, in chronological order.
+
+        Newest-first selection matters on long projects: callers restoring pause
+        state or budget bases must see recent events, not the oldest ones.
+        """
         if node_id:
             rows = self.conn.execute(
-                "SELECT * FROM events WHERE project_id=? AND node_id=? ORDER BY time, id LIMIT ?",
+                "SELECT * FROM (SELECT * FROM events WHERE project_id=? AND node_id=? "
+                "ORDER BY time DESC, id DESC LIMIT ?) ORDER BY time, id",
                 (project_id, node_id, int(limit)),
             ).fetchall()
         else:
             rows = self.conn.execute(
-                "SELECT * FROM events WHERE project_id=? ORDER BY time, id LIMIT ?",
+                "SELECT * FROM (SELECT * FROM events WHERE project_id=? "
+                "ORDER BY time DESC, id DESC LIMIT ?) ORDER BY time, id",
                 (project_id, int(limit)),
             ).fetchall()
         result = []
@@ -332,19 +646,81 @@ class Store:
         *,
         settings: dict[str, Any] | None = None,
         project_id: str | None = None,
+        output_root: str | Path | None = None,
     ) -> str:
         project_id = project_id or new_id()
-        workspace = Path(workspace_path).expanduser().resolve() if workspace_path else (
-            self.db_path.parent / "workspaces" / project_id
-        )
-        workspace.mkdir(parents=True, exist_ok=True)
+        settings_obj = dict(settings or {})
+        # The language adapter is selected by settings.language; Python is the
+        # historical default. Unsupported ids are rejected here so every caller
+        # (CLI, web, eval harness, tests) is covered by one check.
+        settings_obj["language"] = _validated_language(settings_obj)
+        if not self._has_column("projects", "slug"):
+            # Pre-0006 schema (migration tests): keep the historical behaviour.
+            workspace = Path(workspace_path).expanduser().resolve() if workspace_path else (
+                self.db_path.parent / "workspaces" / project_id
+            )
+            workspace.mkdir(parents=True, exist_ok=True)
+            with self._transaction() as conn:
+                conn.execute(
+                    """INSERT INTO projects(id, name, brief, workspace_path, status, created_at, settings_json)
+                       VALUES (?, ?, ?, ?, 'active', ?, ?)""",
+                    (project_id, name, brief, str(workspace), utc_now(), _json_object(settings_obj, "settings")),
+                )
+                self._insert_event(conn, project_id, event_type="project.created", message=f"Project '{name}' created")
+            return project_id
+        if workspace_path is not None:
+            # Backward-compatible explicit project root (legacy callers/tests).
+            workspace = Path(workspace_path).expanduser().resolve()
+            output_root_path = workspace.parent
+            if self.conn.execute("SELECT 1 FROM projects WHERE workspace_path=?", (str(workspace),)).fetchone():
+                raise StoreError(f"workspace already belongs to a project: {workspace}")
+            existing = {row["slug"] for row in self.conn.execute(
+                "SELECT slug FROM projects WHERE output_root=?", (str(output_root_path),)
+            ).fetchall() if row["slug"]}
+            slug = layout.unique_slug(workspace.name, existing)
+            legacy = True
+        else:
+            output_root_path = paths.resolve_output_root(
+                output_root, settings=settings_obj, db_path=self.db_path,
+            )
+            existing = {row["slug"] for row in self.conn.execute(
+                "SELECT slug FROM projects WHERE output_root=?", (str(output_root_path),)
+            ).fetchall() if row["slug"]}
+            try:
+                existing |= {child.name for child in output_root_path.iterdir()}
+            except OSError:
+                pass
+            slug = layout.unique_slug(name, existing)
+            workspace = layout.project_root(output_root_path, slug)
+            legacy = False
+
+        reason = paths.dangerous_root_reason(workspace)
+        if reason:
+            raise paths.LayoutError(reason)
+        if legacy:
+            workspace.mkdir(parents=True, exist_ok=True)
+            if paths.read_marker(workspace) is None:
+                paths.write_marker(workspace, project_id=project_id, slug=slug, name=name)
+        else:
+            workspace = paths.prepare_project_dir(
+                output_root_path, slug, project_id=project_id, name=name,
+            )
+        if not layout.manifest_path(workspace).exists():
+            manifest.write(workspace, {})
+
         with self._transaction() as conn:
             conn.execute(
-                """INSERT INTO projects(id, name, brief, workspace_path, status, created_at, settings_json)
-                   VALUES (?, ?, ?, ?, 'active', ?, ?)""",
-                (project_id, name, brief, str(workspace), utc_now(), _json_object(settings if settings is not None else {}, "settings")),
+                """INSERT INTO projects(id, name, brief, workspace_path, slug, output_root,
+                                         status, created_at, settings_json)
+                   VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?)""",
+                (project_id, name, brief, str(workspace), slug, str(output_root_path),
+                 utc_now(), _json_object(settings_obj, "settings")),
             )
-            self._insert_event(conn, project_id, event_type="project.created", message=f"Project '{name}' created")
+            self._insert_event(
+                conn, project_id, event_type="project.created",
+                message=f"Project '{name}' created",
+                data={"slug": slug, "output_root": str(output_root_path), "workspace_path": str(workspace)},
+            )
         return project_id
 
     def get_project(self, project_id: str) -> dict[str, Any] | None:
@@ -380,6 +756,9 @@ class Store:
         current = self.get_project(project_id)
         if current is None:
             raise KeyError(f"unknown project: {project_id}")
+        if settings is not None and "language" in settings:
+            settings = dict(settings)
+            settings["language"] = _validated_language(settings)
         values = {
             "name": name if name is not None else current["name"],
             "brief": brief if brief is not None else current["brief"],
@@ -387,7 +766,7 @@ class Store:
             "status": status if status is not None else current["status"],
             "settings_json": _json_object(settings, "settings") if settings is not None else canonical_json(current["settings"]),
         }
-        if values["status"] not in {"active", "paused", "done", "archived"}:
+        if values["status"] not in PROJECT_STATUSES:
             raise ValueError(f"invalid project status: {values['status']}")
         with self._transaction() as conn:
             conn.execute(
@@ -395,6 +774,88 @@ class Store:
                 (values["name"], values["brief"], values["workspace_path"], values["status"], values["settings_json"], project_id),
             )
             self._insert_event(conn, project_id, event_type="project.updated", message="Project details updated")
+
+    def set_project_status(self, project_id: str, status: str) -> None:
+        """Single validated entry point for owner/runtime project lifecycle changes."""
+        if status not in PROJECT_STATUSES:
+            raise ValueError(f"invalid project status: {status}")
+        self.update_project(project_id, status=status)
+
+    def update_project_status(self, project_id: str, status: str) -> None:
+        """BLD-12 alias used by the build pipeline after root integration passes."""
+        self.set_project_status(project_id, status)
+
+    def find_project(self, query: str) -> dict[str, Any] | None:
+        """Resolve a project by id, slug or name (id wins, then slug, then name)."""
+        for column in ("id", "slug"):
+            row = self.conn.execute(f"SELECT id FROM projects WHERE {column}=?", (query,)).fetchone()
+            if row is not None:
+                return self.get_project(row["id"])
+        row = self.conn.execute(
+            "SELECT id FROM projects WHERE lower(name)=lower(?) ORDER BY created_at, id LIMIT 1", (query,)
+        ).fetchone()
+        return self.get_project(row["id"]) if row is not None else None
+
+    def update_node_name(self, node_id: str, name: str) -> None:
+        """Rename a node without changing its slug or moving any files."""
+        if not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", name):
+            raise ValueError("node name must be lowercase-hyphenated")
+        row = self.conn.execute("SELECT project_id, name FROM nodes WHERE id=?", (node_id,)).fetchone()
+        if row is None:
+            raise KeyError(f"unknown node: {node_id}")
+        if row["name"] == name:
+            return
+        with self._transaction() as conn:
+            conn.execute("UPDATE nodes SET name=?, updated_at=? WHERE id=?", (name, utc_now(), node_id))
+            self._insert_event(
+                conn, row["project_id"], node_id=node_id, event_type="node.renamed",
+                message=f"Node renamed from '{row['name']}' to '{name}'",
+                data={"old_name": row["name"], "new_name": name},
+            )
+
+    def relocate_project(self, project_id: str, new_output_root: str | Path, *, force: bool = False) -> Path:
+        """Move a project tree to ``<new_output_root>/<slug>`` after manifest verification."""
+        project = self.get_project(project_id)
+        if project is None:
+            raise KeyError(f"unknown project: {project_id}")
+        current = Path(project["workspace_path"]).expanduser().resolve()
+        root = paths.validate_output_root(new_output_root)
+        target = layout.project_root(root, str(project["slug"]))
+        if target == current:
+            return current
+        reason = paths.dangerous_root_reason(target)
+        if reason:
+            raise paths.LayoutError(reason)
+        mismatches = manifest.verify(current)
+        if mismatches and not force:
+            details = ", ".join(f"{m.relpath} ({m.reason})" for m in mismatches[:5])
+            raise StoreError(f"manifest verification failed; refusing to relocate: {details}")
+        if mismatches and force:
+            for item in mismatches:
+                manifest.force_accept(current, item.relpath)
+        if target.is_symlink():
+            raise StoreError(f"relocation target must not be a symlink: {target}")
+        if target.exists():
+            if any(target.iterdir()):
+                raise StoreError(f"relocation target is not empty: {target}")
+            target.rmdir()
+        shutil.move(str(current), str(target))
+        with self._transaction() as conn:
+            conn.execute(
+                "UPDATE projects SET workspace_path=?, output_root=? WHERE id=?",
+                (str(target), str(root), project_id),
+            )
+            self._insert_event(
+                conn, project_id, event_type="project.relocated",
+                message=f"Project moved to {target}",
+                data={"from": str(current), "to": str(target), "output_root": str(root)},
+            )
+        if paths.read_marker(target) is None:
+            paths.write_marker(
+                target, project_id=project_id, slug=str(project["slug"]),
+                name=str(project.get("name") or ""),
+            )
+        return target
 
     def create_node(
         self,
@@ -417,17 +878,36 @@ class Store:
         node_id = node_id or new_id()
         now = utc_now()
         contract_json = _json_object(contract if contract is not None else {}, "contract")
+        project = self.get_project(project_id)
+        if project is None:
+            raise KeyError(f"unknown project: {project_id}")
         with self._transaction() as conn:
             if conn.execute("SELECT 1 FROM projects WHERE id=?", (project_id,)).fetchone() is None:
                 raise KeyError(f"unknown project: {project_id}")
             self._validate_dependencies(conn, project_id, parent_id, node_id, depends_on)
-            conn.execute(
-                """INSERT INTO nodes(id, project_id, parent_id, kind, name, objective, spec_text,
-                       contract_json, status, attempts, test_command, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'draft', 0, ?, ?, ?)""",
-                (node_id, project_id, parent_id, kind, name, objective, spec_text, contract_json,
-                 test_command, now, now),
-            )
+            has_slug = self._has_column("nodes", "slug")
+            if has_slug:
+                siblings = conn.execute(
+                    "SELECT slug FROM nodes WHERE project_id=? AND parent_id IS ?",
+                    (project_id, parent_id),
+                ).fetchall()
+                slug = layout.unique_slug(name, [row["slug"] for row in siblings if row["slug"]])
+                conn.execute(
+                    """INSERT INTO nodes(id, project_id, parent_id, kind, name, objective, spec_text,
+                           contract_json, status, attempts, test_command, slug, created_at, updated_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'draft', 0, ?, ?, ?, ?)""",
+                    (node_id, project_id, parent_id, kind, name, objective, spec_text, contract_json,
+                     test_command, slug, now, now),
+                )
+            else:
+                slug = layout.slugify(name)
+                conn.execute(
+                    """INSERT INTO nodes(id, project_id, parent_id, kind, name, objective, spec_text,
+                           contract_json, status, attempts, test_command, created_at, updated_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'draft', 0, ?, ?, ?)""",
+                    (node_id, project_id, parent_id, kind, name, objective, spec_text, contract_json,
+                     test_command, now, now),
+                )
             for ordinal, dependency_id in enumerate(depends_on):
                 conn.execute(
                     "INSERT INTO node_dependencies(node_id, dependency_node_id, ordinal) VALUES (?, ?, ?)",
@@ -435,7 +915,21 @@ class Store:
                 )
             self._recompute_project_hashes(conn, project_id)
             self._insert_event(conn, project_id, node_id=node_id, event_type="node.created",
-                               message=f"Node '{name}' created", data={"kind": kind, "parent_id": parent_id})
+                               message=f"Node '{name}' created",
+                               data={"kind": kind, "parent_id": parent_id, "slug": slug})
+        workspace = Path(project["workspace_path"])
+        path = self._node_path_for(self.conn, node_id)
+        spec_text_to_write = spec_text or (str(project.get("brief") or "") if parent_id is None else "")
+        if spec_text_to_write:
+            spec_file = layout.spec_path(workspace, path)
+            paths.write_atomic(spec_file, spec_text_to_write, root=workspace)
+            try:
+                manifest.record(
+                    workspace, layout.relative_to_root(workspace, spec_file),
+                    node_id=node_id, stage="spec", content=spec_text_to_write,
+                )
+            except (OSError, ValueError):
+                pass
         return node_id
 
     def get_node(self, node_id: str) -> dict[str, Any] | None:
@@ -447,6 +941,7 @@ class Store:
         item["depends_on"] = [r["dependency_node_id"] for r in self.conn.execute(
             "SELECT dependency_node_id FROM node_dependencies WHERE node_id=? ORDER BY ordinal", (node_id,)
         ).fetchall()]
+        item["path"] = self._node_path_for(self.conn, node_id)
         return item
 
     def list_nodes(self, project_id: str, *, parent_id: str | None = None) -> list[dict[str, Any]]:
@@ -477,6 +972,20 @@ class Store:
             self._recompute_project_hashes(conn, row["project_id"])
             self._insert_event(conn, row["project_id"], node_id=node_id, event_type="node.spec_changed" if field == "spec_text" else "node.contract_changed",
                                message="Node specification updated" if field == "spec_text" else "Node contract updated")
+        if field == "spec_text":
+            project = self.get_project(row["project_id"])
+            node = self.get_node(node_id)
+            if project and node and project.get("workspace_path"):
+                workspace = Path(project["workspace_path"])
+                path = layout.spec_path(workspace, str(node.get("path") or ""))
+                try:
+                    paths.write_atomic(path, value, root=workspace)
+                    manifest.record(
+                        workspace, layout.relative_to_root(workspace, path),
+                        node_id=node_id, stage="spec", content=value,
+                    )
+                except (OSError, ValueError):
+                    pass
 
     def set_node_dependencies(self, node_id: str, depends_on: Sequence[str]) -> None:
         with self._transaction() as conn:
@@ -580,7 +1089,10 @@ class Store:
             for dependency_id in dep_map[node_id]:
                 if dependency_id not in by_id:
                     raise DependencyError(f"node {node_id} references missing dependency {dependency_id}")
-                dependency_hashes.append(calculate(dependency_id))
+                calculate(dependency_id)  # cycle detection + update the dependency itself
+                # Only the dependency's interface participates (amended §4).
+                dep_contract = json.loads(by_id[dependency_id]["contract_json"] or "{}")
+                dependency_hashes.append(sha1_text(canonical_json(dep_contract)))
             new_hash = content_hash(
                 row["spec_text"],
                 json.loads(row["contract_json"] or "{}"),
@@ -607,6 +1119,8 @@ class Store:
         return hashes
 
     def _mark_node_stale(self, conn: sqlite3.Connection, old_row: sqlite3.Row, old_hash: str, new_hash: str) -> None:
+        if str(old_row["status"] or "") in HASH_DESIGN_STATUSES:
+            return
         # Route hash invalidation through the same authoritative status transition
         # function used by scheduler/owner actions (STO-4).
         rejected = self._apply_node_status_transition(
@@ -796,7 +1310,7 @@ class Store:
         return job_id
 
     def update_job(self, job_id: str, **changes: Any) -> None:
-        allowed = {"status", "attempt", "result_ref", "tokens_in", "tokens_out", "started_at", "ended_at", "error"}
+        allowed = {"status", "attempt", "result_ref", "input_ref", "tokens_in", "tokens_out", "started_at", "ended_at", "error"}
         unknown = set(changes) - allowed
         if unknown:
             raise ValueError(f"unsupported job fields: {', '.join(sorted(unknown))}")
@@ -805,6 +1319,8 @@ class Store:
         values = dict(changes)
         if "result_ref" in values:
             values["result_ref_json"] = _json_object(values.pop("result_ref"), "result_ref")
+        if "input_ref" in values:
+            values["input_ref_json"] = _json_object(values.pop("input_ref"), "input_ref")
         if "status" in values and values["status"] not in {"queued", "running", "succeeded", "failed", "cancelled"}:
             raise ValueError(f"invalid job status: {values['status']}")
         with self._transaction() as conn:
@@ -833,6 +1349,7 @@ class Store:
         model_role: str | None = None,
         limit: int = 500,
     ) -> list[dict[str, Any]]:
+        """Return the most recent `limit` matching jobs, in chronological order."""
         clauses, args = ["project_id=?"], [project_id]
         if status:
             clauses.append("status=?")
@@ -842,7 +1359,8 @@ class Store:
             args.append(model_role)
         args.append(int(limit))
         rows = self.conn.execute(
-            f"SELECT * FROM jobs WHERE {' AND '.join(clauses)} ORDER BY created_at, id LIMIT ?", args
+            f"SELECT * FROM (SELECT * FROM jobs WHERE {' AND '.join(clauses)} "
+            "ORDER BY created_at DESC, id DESC LIMIT ?) ORDER BY created_at, id", args
         ).fetchall()
         out = []
         for row in rows:
@@ -1253,15 +1771,37 @@ class Store:
                 bundle_name = f"artifacts/{artifact['id']}.bin"
                 (stage / bundle_name).write_bytes(data)
                 artifact_files[artifact["id"]] = bundle_name
-            manifest = {
+            tree_files: list[dict[str, Any]] = []
+            for relpath, entry in sorted(manifest.read(workspace).items()):
+                parts = _tree_parts(relpath)
+                if parts is None:
+                    continue
+                try:
+                    source = paths.resolve_relative(workspace, relpath)
+                except (ValueError, OSError):
+                    continue
+                if not source.is_file():
+                    continue
+                data = source.read_bytes()
+                target = stage / "tree" / Path(*parts)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(data)
+                tree_files.append({
+                    "path": relpath,
+                    "sha256": hashlib.sha256(data).hexdigest(),
+                    "node_id": entry.get("node_id"),
+                    "stage": entry.get("stage"),
+                })
+            bundle_manifest = {
                 "format": "nai-project-export",
                 "format_version": 1,
                 "exported_at": utc_now(),
                 "project_id": project_id,
                 "tables": tables,
                 "artifact_files": artifact_files,
+                "tree_files": tree_files,
             }
-            (stage / "manifest.json").write_text(canonical_json(manifest) + "\n", encoding="utf-8")
+            (stage / "manifest.json").write_text(canonical_json(bundle_manifest) + "\n", encoding="utf-8")
             if is_zip:
                 temp_zip = destination.with_name(destination.name + ".tmp")
                 with zipfile.ZipFile(temp_zip, "w", compression=zipfile.ZIP_DEFLATED) as archive:
@@ -1294,50 +1834,82 @@ class Store:
         source = Path(source).expanduser().resolve()
         with _BundleReader(source) as bundle:
             try:
-                manifest = json.loads(bundle.read("manifest.json").decode("utf-8"))
+                bundle_manifest = json.loads(bundle.read("manifest.json").decode("utf-8"))
             except Exception as exc:
                 raise ExportImportError(f"cannot read manifest: {exc}") from exc
-            if manifest.get("format") != "nai-project-export" or manifest.get("format_version") != 1:
+            if bundle_manifest.get("format") != "nai-project-export" or bundle_manifest.get("format_version") != 1:
                 raise ExportImportError("unsupported project export format/version")
-            tables = manifest.get("tables")
+            tables = bundle_manifest.get("tables")
             if not isinstance(tables, dict) or not isinstance(tables.get("projects"), list) or len(tables["projects"]) != 1:
                 raise ExportImportError("manifest must contain exactly one project")
             original_project = tables["projects"][0]
             old_project_id = original_project["id"]
+            original_project["settings_json"] = canonical_json(
+                _validated_import_settings(original_project.get("settings_json"))
+            )
             new_project_id = project_id or new_id()
             if self.conn.execute("SELECT 1 FROM projects WHERE id=?", (new_project_id,)).fetchone():
                 raise ExportImportError(f"project id already exists: {new_project_id}")
             if workspace_path is None:
-                base_name = re.sub(r"[^A-Za-z0-9._-]+", "-", original_project.get("name", "project")).strip(".-") or "project"
-                workspace = (self.db_path.parent / "workspaces" / f"{base_name}-{new_project_id}").resolve()
+                output_root = paths.validate_output_root(
+                    original_project.get("output_root") or paths.default_output_root(self.db_path)
+                )
+                existing = {row["slug"] for row in self.conn.execute(
+                    "SELECT slug FROM projects WHERE output_root=?", (str(output_root),)
+                ).fetchall() if row["slug"]}
+                slug = layout.unique_slug(
+                    str(original_project.get("slug") or original_project.get("name") or "project"), existing,
+                )
+                workspace = layout.project_root(output_root, slug)
             else:
                 workspace = Path(workspace_path).expanduser().resolve()
+                output_root = workspace.parent
+                existing = {row["slug"] for row in self.conn.execute(
+                    "SELECT slug FROM projects WHERE output_root=?", (str(output_root),)
+                ).fetchall() if row["slug"]}
+                slug = layout.unique_slug(workspace.name, existing)
             workspace_existed = workspace.exists()
             workspace.mkdir(parents=True, exist_ok=True)
+            if paths.read_marker(workspace) is None:
+                paths.write_marker(workspace, project_id=new_project_id, slug=slug,
+                                   name=str(original_project.get("name") or ""))
+            if not layout.manifest_path(workspace).is_file():
+                manifest.write(workspace, {})
 
             # Generate new globally unique IDs for every primary-keyed project row.
             id_maps: dict[str, dict[str, str]] = {}
             for table in ("nodes", "jobs", "events", "artifacts", "approvals", "commands"):
                 id_maps[table] = {row["id"]: new_id() for row in tables.get(table, [])}
             id_maps["projects"] = {old_project_id: new_project_id}
+            node_slugs: dict[str, str] = {}
 
             try:
                 with self._transaction() as conn:
                     p = dict(original_project)
-                    p.update(id=new_project_id, workspace_path=str(workspace))
+                    p.update(id=new_project_id, workspace_path=str(workspace), slug=slug,
+                             output_root=str(output_root))
                     conn.execute(
-                        "INSERT INTO projects(id,name,brief,workspace_path,status,created_at,settings_json) VALUES (?,?,?,?,?,?,?)",
-                        tuple(p[k] for k in ("id", "name", "brief", "workspace_path", "status", "created_at", "settings_json")),
+                        "INSERT INTO projects(id,name,brief,workspace_path,slug,output_root,status,created_at,settings_json) "
+                        "VALUES (?,?,?,?,?,?,?,?,?)",
+                        tuple(p[k] for k in ("id", "name", "brief", "workspace_path", "slug", "output_root",
+                                             "status", "created_at", "settings_json")),
                     )
+                    sibling_slugs: dict[str | None, set[str]] = {}
                     for row in tables.get("nodes", []):
+                        parent = row.get("parent_id")
+                        taken = sibling_slugs.setdefault(parent, set())
+                        node_slug = row.get("slug") or layout.unique_slug(str(row["name"]), taken)
+                        taken.add(str(node_slug))
+                        node_slugs[row["id"]] = str(node_slug)
                         conn.execute(
                             """INSERT INTO nodes(id,project_id,parent_id,kind,name,objective,spec_text,contract_json,status,
-                               content_hash,built_hash,attempts,test_command,created_at,updated_at)
-                               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                               content_hash,built_hash,attempts,test_command,slug,created_at,updated_at)
+                               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                             (id_maps["nodes"][row["id"]], new_project_id,
                              id_maps["nodes"].get(row.get("parent_id")) if row.get("parent_id") else None,
                              row["kind"], row["name"], row["objective"], row["spec_text"], row["contract_json"], row["status"],
-                             row.get("content_hash"), row.get("built_hash"), row["attempts"], row.get("test_command"), row["created_at"], row["updated_at"]),
+                             row.get("content_hash"), row.get("built_hash"), row["attempts"], row.get("test_command"),
+                             node_slug, row["created_at"], row["updated_at"]),
                         )
                     for row in tables.get("node_dependencies", []):
                         conn.execute(
@@ -1372,7 +1944,7 @@ class Store:
                              row["time"], row["level"], row["type"], row["message"], row["data_json"]),
                         )
                     for row in tables.get("artifacts", []):
-                        bundle_name = manifest.get("artifact_files", {}).get(row["id"])
+                        bundle_name = bundle_manifest.get("artifact_files", {}).get(row["id"])
                         if not bundle_name:
                             raise ExportImportError(f"artifact file mapping missing for {row['id']}")
                         bundle_relative = _safe_relative_path(bundle_name).as_posix()
@@ -1407,11 +1979,376 @@ class Store:
                         )
                     self._insert_event(conn, new_project_id, event_type="project.imported", message="Project imported from export bundle",
                                        data={"source_project_id": old_project_id})
+                    _restore_project_tree(workspace, tables, id_maps, node_slugs, bundle_manifest, bundle)
             except Exception:
                 if not workspace_existed:
                     shutil.rmtree(workspace, ignore_errors=True)
                 raise
             return new_project_id
+
+
+    # ------------------------------------------------------------------
+    # Remote workers and tasks (Prompt 5)
+    #
+    # The worker API is a second writer process, but it only touches these two
+    # tables and every claim runs inside ``BEGIN IMMEDIATE``, so exactly one
+    # worker can take a task.  Tokens are stored as sha256 hex digests and
+    # compared with ``hmac.compare_digest``; the plaintext never reaches disk.
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def hash_worker_token(token: str) -> str:
+        """Return the stored form of a worker bearer token."""
+        return hashlib.sha256(str(token).encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _worker_row(row: sqlite3.Row) -> dict[str, Any]:
+        item = dict(row)
+        item["capabilities"] = _json_list(item.pop("capabilities_json", "[]"))
+        item["toolchains"] = _json_dict(item.pop("toolchains_json", "{}"))
+        item["revoked"] = bool(item.get("revoked"))
+        return item
+
+    @staticmethod
+    def _remote_task_row(row: sqlite3.Row) -> dict[str, Any]:
+        item = dict(row)
+        item["params"] = _json_dict(item.pop("params_json", "{}"))
+        item["result"] = _json_dict(item.pop("result_json", "{}"))
+        item["required_caps"] = _json_list(item.pop("required_caps", "[]"))
+        return item
+
+    def add_worker(
+        self,
+        name: str,
+        token_hash: str,
+        *,
+        capabilities: Sequence[str] = (),
+        toolchains: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Register a worker; the caller keeps the plaintext token."""
+        name = str(name).strip()
+        if not name:
+            raise StoreError("worker name is required")
+        if not str(token_hash or "").strip():
+            raise StoreError("worker token hash is required")
+        worker_id = new_id()
+        caps = sorted({_norm_cap(c) for c in capabilities if str(c).strip()})
+        try:
+            with self._transaction() as conn:
+                conn.execute(
+                    "INSERT INTO workers(id,name,token_hash,capabilities_json,toolchains_json,last_seen,revoked,created_at)"
+                    " VALUES (?,?,?,?,?,NULL,0,?)",
+                    (worker_id, name, token_hash, canonical_json(caps), canonical_json(toolchains or {}), utc_now()),
+                )
+        except sqlite3.IntegrityError as exc:
+            raise StoreError(f"worker name already exists: {name}") from exc
+        return self.get_worker(worker_id) or {}
+
+    def list_workers(self) -> list[dict[str, Any]]:
+        """Every registered worker, revoked ones included."""
+        rows = self.conn.execute("SELECT * FROM workers ORDER BY name, id").fetchall()
+        return [self._worker_row(row) for row in rows]
+
+    def get_worker(self, identifier: str) -> dict[str, Any] | None:
+        """Look a worker up by id or name."""
+        row = self.conn.execute(
+            "SELECT * FROM workers WHERE id=? OR name=? ORDER BY id LIMIT 1",
+            (str(identifier), str(identifier)),
+        ).fetchone()
+        return self._worker_row(row) if row else None
+
+    def revoke_worker(self, identifier: str) -> bool:
+        """Mark a worker revoked so its token stops authenticating."""
+        worker = self.get_worker(identifier)
+        if worker is None:
+            return False
+        with self._transaction() as conn:
+            conn.execute("UPDATE workers SET revoked=1 WHERE id=?", (worker["id"],))
+        return True
+
+
+    def touch_worker(
+        self,
+        worker_id: str,
+        *,
+        capabilities: Sequence[str] | None = None,
+        toolchains: dict[str, Any] | None = None,
+        now: str | None = None,
+    ) -> None:
+        """Record a heartbeat: ``last_seen`` plus any capability refresh."""
+        sets = ["last_seen=?"]
+        params: list[Any] = [now or utc_now()]
+        if capabilities is not None:
+            sets.append("capabilities_json=?")
+            params.append(canonical_json(sorted({_norm_cap(c) for c in capabilities if str(c).strip()})))
+        if toolchains is not None:
+            sets.append("toolchains_json=?")
+            params.append(canonical_json(toolchains))
+        params.append(worker_id)
+        with self._transaction() as conn:
+            conn.execute(f"UPDATE workers SET {', '.join(sets)} WHERE id=?", params)
+
+    def worker_for_token(self, token: str) -> dict[str, Any] | None:
+        """Resolve a bearer token in constant time; revoked workers never match."""
+        if not token:
+            return None
+        digest = self.hash_worker_token(token)
+        match: dict[str, Any] | None = None
+        for row in self.conn.execute("SELECT * FROM workers WHERE revoked=0").fetchall():
+            # Compare every row so timing does not reveal a near match.
+            if hmac.compare_digest(str(row["token_hash"]), digest):
+                match = self._worker_row(row)
+        return match
+
+    def online_workers(self, *, lease_seconds: float = 60, now: str | None = None) -> list[dict[str, Any]]:
+        """Workers whose last heartbeat is inside the lease window."""
+        cutoff = _iso_minus(lease_seconds, now)
+        rows = self.conn.execute(
+            "SELECT * FROM workers WHERE revoked=0 AND last_seen IS NOT NULL AND last_seen>=? ORDER BY name, id",
+            (cutoff,),
+        ).fetchall()
+        return [self._worker_row(row) for row in rows]
+
+    def workers_with_caps(
+        self, required_caps: Sequence[str], *, lease_seconds: float = 60, now: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Online workers that declare every required capability."""
+        needed = {_norm_cap(c) for c in required_caps}
+        return [
+            w for w in self.online_workers(lease_seconds=lease_seconds, now=now)
+            if needed <= set(w["capabilities"])
+        ]
+
+
+    def create_remote_task(
+        self,
+        project_id: str,
+        recipe: str,
+        snapshot_sha: str,
+        *,
+        job_id: str | None = None,
+        params: dict[str, Any] | None = None,
+        required_caps: Sequence[str] = (),
+        now: str | None = None,
+    ) -> dict[str, Any]:
+        """Queue one named recipe for a worker with the required capabilities."""
+        task_id = new_id()
+        stamp = now or utc_now()
+        caps = sorted({_norm_cap(c) for c in required_caps if str(c).strip()})
+        with self._transaction() as conn:
+            conn.execute(
+                "INSERT INTO remote_tasks(id,project_id,job_id,recipe,params_json,snapshot_sha,required_caps,status,"
+                "lease_expires_at,worker_id,redeliveries,result_json,error,created_at,updated_at)"
+                " VALUES (?,?,?,?,?,?,?,'queued',NULL,NULL,0,'{}','',?,?)",
+                (task_id, project_id, job_id, str(recipe), canonical_json(params or {}), str(snapshot_sha),
+                 canonical_json(caps), stamp, stamp),
+            )
+        return self.get_remote_task(task_id) or {}
+
+    def get_remote_task(self, task_id: str) -> dict[str, Any] | None:
+        """Fetch one task by id."""
+        row = self.conn.execute("SELECT * FROM remote_tasks WHERE id=?", (str(task_id),)).fetchone()
+        return self._remote_task_row(row) if row else None
+
+    def list_remote_tasks(
+        self,
+        *,
+        project_id: str | None = None,
+        worker_id: str | None = None,
+        status: str | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """Most recent tasks first, optionally filtered."""
+        where: list[str] = []
+        params: list[Any] = []
+        if project_id:
+            where.append("t.project_id=?")
+            params.append(project_id)
+        if worker_id:
+            where.append("t.worker_id=?")
+            params.append(worker_id)
+        if status:
+            where.append("t.status=?")
+            params.append(status)
+        clause = f" WHERE {' AND '.join(where)}" if where else ""
+        params.append(max(1, int(limit)))
+        rows = self.conn.execute(
+            "SELECT t.*, w.name AS worker_name FROM remote_tasks t LEFT JOIN workers w ON w.id=t.worker_id"
+            f"{clause} ORDER BY t.created_at DESC, t.id DESC LIMIT ?",
+            params,
+        ).fetchall()
+        return [self._remote_task_row(row) for row in rows]
+
+    def cancel_remote_task(self, task_id: str, *, reason: str = "", now: str | None = None) -> bool:
+        """Ask a worker to stop; the heartbeat response carries the cancel flag."""
+        stamp = now or utc_now()
+        with self._transaction() as conn:
+            row = conn.execute("SELECT status FROM remote_tasks WHERE id=?", (str(task_id),)).fetchone()
+            if row is None or row["status"] in {"done", "failed", "cancelled"}:
+                return False
+            conn.execute(
+                "UPDATE remote_tasks SET status='cancelled', error=?, updated_at=? WHERE id=?",
+                (str(reason or "cancelled"), stamp, str(task_id)),
+            )
+        return True
+
+
+    def claim_remote_task(
+        self,
+        worker_id: str,
+        capabilities: Sequence[str],
+        *,
+        lease_seconds: float = 60,
+        max_redeliveries: int = 3,
+        now: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Atomically lease the oldest queued task this worker can run.
+
+        Expiring leases and the claim happen in one ``BEGIN IMMEDIATE``
+        transaction, so two workers polling at the same time can never receive
+        the same task.
+        """
+        stamp = now or utc_now()
+        caps = {_norm_cap(c) for c in capabilities}
+        with self._transaction() as conn:
+            self._expire_remote_tasks(conn, max_redeliveries=max_redeliveries, now=stamp)
+            rows = conn.execute(
+                "SELECT * FROM remote_tasks WHERE status='queued' ORDER BY created_at, id"
+            ).fetchall()
+            chosen = None
+            for row in rows:
+                if {_norm_cap(c) for c in _json_list(row["required_caps"])} <= caps:
+                    chosen = row
+                    break
+            if chosen is None:
+                return None
+            lease = _iso_plus(lease_seconds, stamp)
+            conn.execute(
+                "UPDATE remote_tasks SET status='claimed', worker_id=?, lease_expires_at=?, updated_at=? WHERE id=?",
+                (worker_id, lease, stamp, chosen["id"]),
+            )
+            claimed = conn.execute("SELECT * FROM remote_tasks WHERE id=?", (chosen["id"],)).fetchone()
+            return self._remote_task_row(claimed)
+
+    def heartbeat_remote_task(
+        self,
+        task_id: str,
+        worker_id: str,
+        *,
+        lease_seconds: float = 60,
+        max_redeliveries: int = 3,
+        now: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Extend a lease and tell the worker whether to stop.
+
+        Returns ``None`` when the task is unknown or leased to another worker.
+        """
+        stamp = now or utc_now()
+        with self._transaction() as conn:
+            self._expire_remote_tasks(conn, max_redeliveries=max_redeliveries, now=stamp)
+            row = conn.execute("SELECT * FROM remote_tasks WHERE id=?", (str(task_id),)).fetchone()
+            if row is None or row["worker_id"] != worker_id:
+                return None
+            if row["status"] == "claimed":
+                conn.execute(
+                    "UPDATE remote_tasks SET lease_expires_at=?, updated_at=? WHERE id=?",
+                    (_iso_plus(lease_seconds, stamp), stamp, row["id"]),
+                )
+                row = conn.execute("SELECT * FROM remote_tasks WHERE id=?", (row["id"],)).fetchone()
+            task = self._remote_task_row(row)
+            return {
+                "task_id": task["id"],
+                "status": task["status"],
+                "cancel": task["status"] == "cancelled",
+                "lease_expires_at": task.get("lease_expires_at"),
+            }
+
+
+    def finish_remote_task(
+        self,
+        task_id: str,
+        worker_id: str,
+        result: dict[str, Any],
+        *,
+        now: str | None = None,
+    ) -> bool:
+        """Record a worker's result. A cancelled task ignores late results."""
+        stamp = now or utc_now()
+        with self._transaction() as conn:
+            row = conn.execute("SELECT * FROM remote_tasks WHERE id=?", (str(task_id),)).fetchone()
+            if row is None or row["worker_id"] != worker_id or row["status"] != "claimed":
+                return False
+            conn.execute(
+                "UPDATE remote_tasks SET status='done', result_json=?, error='', lease_expires_at=NULL, updated_at=?"
+                " WHERE id=?",
+                (canonical_json(result or {}), stamp, row["id"]),
+            )
+        return True
+
+    def fail_remote_task(
+        self,
+        task_id: str,
+        worker_id: str,
+        error: str,
+        *,
+        now: str | None = None,
+    ) -> bool:
+        """Mark a claimed task failed (the worker could not even run it)."""
+        stamp = now or utc_now()
+        message = str(error or "infrastructure: task failed")
+        if not message.startswith("infrastructure:"):
+            message = f"infrastructure: {message}"
+        with self._transaction() as conn:
+            row = conn.execute("SELECT * FROM remote_tasks WHERE id=?", (str(task_id),)).fetchone()
+            if row is None or row["worker_id"] != worker_id or row["status"] != "claimed":
+                return False
+            conn.execute(
+                "UPDATE remote_tasks SET status='failed', error=?, result_json=?, lease_expires_at=NULL, updated_at=?"
+                " WHERE id=?",
+                (message, canonical_json({"infrastructure": True, "error": message}), stamp, row["id"]),
+            )
+        return True
+
+    def expire_remote_tasks(
+        self,
+        *,
+        max_redeliveries: int = 3,
+        now: str | None = None,
+    ) -> list[str]:
+        """Requeue expired leases; the third expiry fails the task as infrastructure."""
+        stamp = now or utc_now()
+        with self._transaction() as conn:
+            return self._expire_remote_tasks(conn, max_redeliveries=max_redeliveries, now=stamp)
+
+    def _expire_remote_tasks(
+        self, conn: sqlite3.Connection, *, max_redeliveries: int, now: str
+    ) -> list[str]:
+        """Requeue (or fail) every lease that has run out. Caller holds a transaction."""
+        rows = conn.execute(
+            "SELECT * FROM remote_tasks WHERE status='claimed' AND lease_expires_at IS NOT NULL AND lease_expires_at<=?",
+            (now,),
+        ).fetchall()
+        expired: list[str] = []
+        for row in rows:
+            expired.append(row["id"])
+            redeliveries = int(row["redeliveries"]) + 1
+            if redeliveries >= int(max_redeliveries):
+                message = (
+                    f"infrastructure: worker {row['worker_id'] or 'unknown'} lost the lease "
+                    f"{redeliveries} times"
+                )
+                conn.execute(
+                    "UPDATE remote_tasks SET status='failed', redeliveries=?, worker_id=NULL, lease_expires_at=NULL,"
+                    " result_json=?, error=?, updated_at=? WHERE id=?",
+                    (redeliveries, canonical_json({"infrastructure": True, "error": message}), message, now, row["id"]),
+                )
+            else:
+                conn.execute(
+                    "UPDATE remote_tasks SET status='queued', redeliveries=?, worker_id=NULL, lease_expires_at=NULL,"
+                    " updated_at=? WHERE id=?",
+                    (redeliveries, now, row["id"]),
+                )
+        return expired
 
 
 class _BundleReader:
@@ -1421,7 +2358,7 @@ class _BundleReader:
         self.source = source
         self.archive: zipfile.ZipFile | None = None
 
-    def __enter__(self) -> "_BundleReader":
+    def __enter__(self) -> _BundleReader:
         if self.source.is_dir():
             self.archive = None
         elif self.source.is_file() and zipfile.is_zipfile(self.source):

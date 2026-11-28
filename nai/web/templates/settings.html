@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}{{ project.name }} · Settings{% endblock %}
+{% block content %}
+<div class="breadcrumbs"><a href="/">Projects</a><span>/</span><a href="/projects/{{ project.id }}">{{ project.name }}</a><span>/</span>Settings</div>
+<div class="page-heading"><div><p class="eyebrow">PROJECT SETTINGS</p><h1>{{ project.name }}</h1>
+  <p class="muted">Size limits (X9), budgets, test commands and backup location.</p></div></div>
+
+<section class="panel">
+  <form method="post" action="/projects/{{ project.id }}/settings">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <div class="content-grid">
+      <div>
+        <h2>Size limits (X9)</h2>
+        <p class="tiny muted">These override the TOML <code>[limits]</code> table for this project.</p>
+        <label>Max requirements per component<br><input type="number" name="max_requirements" min="1" value="{{ settings.max_requirements_per_component|default(8) }}"></label>
+        <label>Max public functions per component<br><input type="number" name="max_functions" min="1" value="{{ settings.max_public_functions_per_component|default(10) }}"></label>
+        <label>Max components per level<br><input type="number" name="max_components" min="1" value="{{ settings.max_components_per_level|default(7) }}"></label>
+        <label>Max recursion depth<br><input type="number" name="max_depth" min="1" value="{{ settings.max_depth|default(4) }}"></label>
+      </div>
+      <div>
+        <h2>Budget &amp; environment</h2>
+        <label>Token budget (0 = unlimited)<br><input type="number" name="budget_limit_tokens" min="0" value="{{ settings.budget_limit_tokens|default(0) }}"></label>
+        <label>Target language<br>
+          <select name="target_language">
+            {% for language in languages %}
+            <option value="{{ language.id }}" {% if settings.get('language', 'python') == language.id %}selected{% endif %}>{{ language.display_name }} — {{ language.stack_hint }}</option>
+            {% endfor %}
+          </select>
+          <span class="tiny muted">One language per project; only registered adapters are listed.</span>
+        </label>
+        <label>Backup location (optional)<br><input type="text" name="backup_location" value="{{ settings.backup_location|default('') }}"></label>
+        <h2>Verification commands</h2>
+        <p class="tiny muted">One command per line; a node passes when its test command matches one of these.</p>
+        <textarea name="test_commands" rows="5" class="spec-textarea" style="min-height:100px">{% for cmd in settings.test_commands|default([]) %}{{ cmd }}
+{% endfor %}</textarea>
+      </div>
+    </div>
+    <div class="form-actions"><button class="button primary">Save settings</button><a class="button secondary" href="/projects/{{ project.id }}">Cancel</a></div>
+  </form>
+</section>
+{% endblock %}

@@ -13,7 +13,7 @@ class Budget:
     max_wall_seconds: float = 7200.0
     max_tokens: int = 2_000_000
 
-    def scaled(self, factor: float) -> "Budget":
+    def scaled(self, factor: float) -> Budget:
         """e.g. the escalation pass of BLD-9 gets a larger token and time budget (job input_ref budget_multiplier)."""
         return replace(self, max_wall_seconds=self.max_wall_seconds * factor, max_tokens=int(self.max_tokens * factor))
 

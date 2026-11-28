@@ -3,12 +3,13 @@
 {% block content %}
 <div class="page-heading">
   <div><p class="eyebrow">WORKSPACE</p><h1>Projects</h1><p class="muted">Project state, build progress and recent activity.</p></div>
-  <form method="post" action="/projects/create" class="inline-form">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    <input type="text" name="name" placeholder="Project name" required>
-    <input type="text" name="brief" placeholder="Brief description">
-    <button type="submit" class="button primary">＋ New project</button>
-  </form>
+  <button type="button" class="button primary" data-open-dialog="new-project-dialog">＋ New project</button>
+</div>
+<div class="filter-bar">
+  <a class="button ghost small" href="/projects?show_archived=0" {% if not show_archived %}aria-current="page"{% endif %}Active projects</a>
+  <a class="button ghost small" href="{% if show_archived %}/projects?show_archived=0{% else %}/projects?show_archived=1{% endif %}" {% if show_archived %}aria-current="page"{% endif %}>
+    {% if show_archived %}Hide archived{% else %}Show archived ({{ archived_count }}){% endif %}
+  </a>
 </div>
 {% if projects %}
   <div class="project-grid">
@@ -16,6 +17,7 @@
     <article class="panel project-card">
       <div class="card-heading">
         <div><h2><a href="/projects/{{ p.id }}">{{ p.name }}</a></h2><span class="muted tiny">{{ p.id }}</span></div>
+        <span class="phase-badge phase-{{ p.phase }}">{{ p.phase|capitalize }}</span>
         <span class="status status-{{ p.status }}">{{ p.status }}</span>
       </div>
       <div class="progress-line" role="progressbar" aria-label="{{ p.name }} completion" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{ p.percent_done }}"><span style="width: {{ p.percent_done }}%"></span></div>
@@ -30,14 +32,27 @@
       </dl>
       <div class="project-actions">
         <a class="text-link" href="/projects/{{ p.id }}">Open →</a>
-        <form method="post" action="/projects/{{ p.id }}/control/pause" class="inline-form">
+        {% if p.status in ('active', 'paused') %}
+        <form method="post" action="/projects/{{ p.id }}/control/pause" class="inline-form control-form">
           <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
           <button type="submit" class="button ghost small" {% if p.status == 'paused' %}disabled{% endif %}>Pause</button>
         </form>
-        <form method="post" action="/projects/{{ p.id }}/control/cancel" class="inline-form" onsubmit="return confirm('Cancel this project?')">
+        <form method="post" action="/projects/{{ p.id }}/control/cancel" class="inline-form control-form" data-confirm="Cancel this project?">
           <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
           <button type="submit" class="button ghost small danger">Cancel</button>
         </form>
+        {% else %}
+        <form method="post" action="/projects/{{ p.id }}/unarchive" class="inline-form">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <button type="submit" class="button ghost small">{% if p.status == 'archived' %}Restore{% else %}Reopen{% endif %}</button>
+        </form>
+        {% endif %}
+        {% if p.status != 'archived' %}
+        <form method="post" action="/projects/{{ p.id }}/archive" class="inline-form confirm-form" data-confirm="Archive this project?">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <button type="submit" class="button ghost small">Archive</button>
+        </form>
+        {% endif %}
       </div>
     </article>
   {% endfor %}
@@ -45,4 +60,87 @@
 {% else %}
   <section class="empty-state panel"><div class="empty-icon">◫</div><h2>No projects yet</h2><p>Create a project to get started.</p></section>
 {% endif %}
+
+<dialog id="new-project-dialog" class="modal-dialog" aria-labelledby="new-project-title">
+  <form method="post" action="/projects/create" class="modal-form" enctype="multipart/form-data">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <div class="modal-heading">
+      <div><p class="eyebrow">PROJECT INTAKE</p><h2 id="new-project-title">New project</h2></div>
+      <button type="button" class="button ghost small" data-close-dialog>✕</button>
+    </div>
+    <p class="muted tiny">Blank options are left out of the model's brief. After creation, the model asks focused questions before design starts.</p>
+
+    <label>Project name
+      <input type="text" name="name" placeholder="e.g. Task Tracker" required maxlength="200">
+    </label>
+    {% if output_roots %}
+    <label>Output folder
+      <select name="output_root">
+        {% for root in output_roots %}<option value="{{ root }}">{{ root }}</option>{% endfor %}
+      </select>
+      <span class="tiny muted">Only folders configured in NAI_OUTPUT_ROOTS can be selected.</span>
+    </label>
+    {% endif %}
+    <label>Project description
+      <textarea name="brief" rows="8" class="spec-textarea wide-textarea" placeholder="Describe what you want to build, why, and what success looks like."></textarea>
+    </label>
+    <label>Start from an existing spec (optional)
+      <input type="file" name="spec_file" accept=".md,.txt,text/markdown,text/plain">
+      <span class="tiny muted">Markdown or text, up to 2 MB. Uploading skips Info Gathering and seeds the root spec.</span>
+    </label>
+
+    <div class="content-grid">
+      <label>Programming language
+        <select name="language">
+          {% for language in languages %}
+          <option value="{{ language.id }}">{{ language.display_name }} — {{ language.stack_hint }}</option>
+          {% endfor %}
+        </select>
+        <span class="tiny muted">One language per project; only registered adapters are listed.</span>
+      </label>
+      <label>Interface type
+        <select name="interface_type">
+          <option value="">Unspecified</option>
+          <option value="CLI">CLI</option>
+          <option value="Web application">Web application</option>
+          <option value="Windowed desktop application">Windowed desktop application</option>
+          <option value="Fullscreen application">Fullscreen application</option>
+          <option value="Library / API">Library / API</option>
+          <option value="Service / daemon">Service / daemon</option>
+          <option value="Other">Other</option>
+        </select>
+      </label>
+    </div>
+
+    <details class="guardrail-details">
+      <summary>Optional guardrails</summary>
+      <label>Target users
+        <textarea name="target_users" rows="2" placeholder="Who will use this?"></textarea>
+      </label>
+      <label>Core workflows
+        <textarea name="core_workflows" rows="3" placeholder="List the main things a user must be able to do."></textarea>
+      </label>
+      <label>Non-goals / constraints
+        <textarea name="non_goals" rows="2" placeholder="What should it not do? What constraints matter?"></textarea>
+      </label>
+      <label>Runtime / deployment
+        <textarea name="runtime_deployment" rows="2" placeholder="Local, LAN, cloud, offline, container…"></textarea>
+      </label>
+      <label>Preferred stack / libraries
+        <textarea name="stack_libraries" rows="2" placeholder="Frameworks or libraries you want or want to avoid."></textarea>
+      </label>
+      <label>Accessibility / security needs
+        <textarea name="accessibility_security" rows="2" placeholder="Accessibility target, auth, privacy, data handling…"></textarea>
+      </label>
+      <label>Testing expectations
+        <textarea name="testing_expectations" rows="2" placeholder="Unit, integration, browser, performance, coverage…"></textarea>
+      </label>
+    </details>
+
+    <div class="form-actions">
+      <button type="button" class="button secondary" data-close-dialog>Cancel</button>
+      <button type="submit" class="button primary">Create and gather info</button>
+    </div>
+  </form>
+</dialog>
 {% endblock %}

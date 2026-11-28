@@ -9,7 +9,7 @@ An empty `writable` tuple means nothing is writable. Reads are never restricted.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from functools import lru_cache
 
 
@@ -60,7 +60,7 @@ class PathPolicy:
     readonly: tuple[str, ...] = ()
 
     @classmethod
-    def allow_all(cls) -> "PathPolicy":
+    def allow_all(cls) -> PathPolicy:
         return cls()
 
     def allows_write(self, rel: str) -> bool:

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites>
+  <testsuite name="./build/adder_test" errors="0" failures="1" tests="1" time="0.000122" timestamp="2026-11-26T15:20:44Z" doctest_version="2.4.11">
+    <testcase classname="/tmp/cppcap/tests/adder/adder_test.cpp" name="R1_adds_two_numbers" time="0.000122" status="run">
+      <failure type="CHECK">
+/tmp/cppcap/tests/adder/adder_test.cpp:5:
+CHECK( adder::add(2, 3) == 6 ) THREW exception: "not implemented"
+
+      </failure>
+    </testcase>
+  </testsuite>
+</testsuites>

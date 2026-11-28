@@ -28,7 +28,7 @@ class RoleConfig:
         return s
 
     @classmethod
-    def from_dict(cls, d: dict) -> "RoleConfig":
+    def from_dict(cls, d: dict) -> RoleConfig:
         if "model_id" not in d:
             raise ValueError("role block needs model_id")
         d = dict(d)
@@ -59,7 +59,7 @@ class ModelProfile:
         return getattr(self, role)
 
     @classmethod
-    def from_dict(cls, name: str, d: dict) -> "ModelProfile":
+    def from_dict(cls, name: str, d: dict) -> ModelProfile:
         for r in ROLES:
             if r not in d:
                 raise ValueError(f"profile {name!r}: missing [{r}] block")
@@ -103,12 +103,13 @@ class ModelClient:
 
     def chat(self, role: str, messages, tools=None, max_tokens: int | None = None, tag: str | None = None,
              response_format: dict | None = None, grammar: str | None = None,
-             sampling: dict | None = None, meta: dict | None = None) -> ChatResult:
+             sampling: dict | None = None, meta: dict | None = None, cancel_event=None) -> ChatResult:
         rc = self.profile.role(role)
         s = rc.sampling()
         s.update(sampling or {})
         return self.llm.chat(rc.model_id, messages, s, tools=tools, max_tokens=max_tokens or rc.max_tokens, tag=tag or role,
-                             response_format=response_format, grammar=grammar, meta={"role": role, **(meta or {})})
+                             response_format=response_format, grammar=grammar,
+                             meta={"role": role, **(meta or {})}, cancel_event=cancel_event)
 
 
 def with_overrides(profile: ModelProfile, *, reasoner: str | None = None, coder: str | None = None,

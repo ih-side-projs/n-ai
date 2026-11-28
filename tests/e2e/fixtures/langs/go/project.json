@@ -1,0 +1,21 @@
+{
+  "language": "go",
+  "name": "Tiny Library",
+  "brief": "# Tiny Library\n\nBuild a two-component Go module:\n\n- `text-normalizer` provides `NormalizeText(text string) string`.\n- `word-counter` provides `CountWords(text string) int`.\n- Integration scenario S1: normalize text, then count its words.\n",
+  "settings": {
+    "language": "go",
+    "package_name": "tiny-library"
+  },
+  "e2e_test": "tests/e2e/test_pipeline_go.py",
+  "expected": {
+    "modules": ["text-normalizer", "word-counter"],
+    "source_files": [
+      "internal/text_normalizer/text_normalizer.go",
+      "internal/word_counter/word_counter.go"
+    ],
+    "test_files": [
+      "internal/text_normalizer/text_normalizer_test.go",
+      "internal/word_counter/word_counter_test.go"
+    ]
+  }
+}

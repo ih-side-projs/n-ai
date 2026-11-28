@@ -1,10 +1,10 @@
 """CORE-7 ModelProfile / ModelClient and X7 configuration."""
 import pytest
 
-from tests.core.conftest import make_client
 from nai.config import ConfigError, load_config
 from nai.models import ModelProfile, RoleConfig, default_profile
 from nai.testing.stub_server import reply
+from tests.core.conftest import make_client
 
 TOML = """
 default_profile = "fast"

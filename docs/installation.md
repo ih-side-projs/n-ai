@@ -81,8 +81,34 @@ nai run --plugin nai.build ...        # commands from job context
 python devswarm.py SPEC.md --docker python:3.12
 ```
 
-Docker mode is exercised in tests through a fake `docker` executable; no daemon
-is required for development.
+Docker mode is hardened: commands run in a named container with `--network none`
+(run phase), memory/CPU/process caps, `--cap-drop ALL`,
+`--security-opt no-new-privileges` and a non-root user; setup installs run in a
+separate one-shot container with network access. See
+[Command execution](subsystems/execution.md). Tests drive Docker mode through a
+fake `docker` executable, so no daemon is required for development; a single
+real-daemon round-trip test skips when `docker` is unavailable.
+
+## Optional: remote build workers
+
+Platform-specific (`macos`) components can build and test on another machine
+over the LAN; Linux keeps the store, the model calls and result parsing. On the
+orchestrator, `nai worker add macbook --capabilities macos,python` prints a token
+once and `nai remote serve --host 0.0.0.0 --insecure-lan` exposes the worker API
+on a trusted network (prefer `--certfile/--keyfile`). On the Mac, install the
+package, run `nai-worker init --name macbook --server URL --token TOKEN`, check
+with `nai-worker doctor`, then `nai-worker run` (or load
+`deploy/nai-worker.plist`). See [Remote workers](subsystems/remote-workers.md).
+
+## Optional: Swift toolchain
+
+Swift projects build with SwiftPM and XCTest. Install a Swift 6 toolchain
+(`swift`, `swiftc`; `xcodebuild` on macOS) and run `nai languages` to confirm the
+probe: `python` is required on every host, `swift` only for Swift projects. On
+Linux the official toolchain from swift.org works; on macOS the Xcode command
+line tools provide it. `swiftc -parse` is used as a syntax pre-check when it is
+present, and `xcodebuild-test` (owner-supplied Xcode project) needs macOS. See
+[Language adapters](subsystems/languages.md).
 
 ## Development install for docs
 

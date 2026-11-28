@@ -23,6 +23,16 @@
                 "pattern": "^[a-z][a-z0-9-]*$",
                 "type": "string"
               },
+              "platform": {
+                "default": "any",
+                "description": "any|linux|macos; isolate platform-specific code in leaf components",
+                "enum": [
+                  "any",
+                  "linux",
+                  "macos"
+                ],
+                "type": "string"
+              },
               "provides": {
                 "items": {
                   "additionalProperties": false,
@@ -105,6 +115,20 @@
             "type": "object"
           },
           "type": "array"
+        },
+        "language": {
+          "default": "python",
+          "description": "Project language id (one per project); generated from the adapter registry",
+          "enum": [
+            "c",
+            "cpp",
+            "go",
+            "python",
+            "rust",
+            "swift",
+            "typescript"
+          ],
+          "type": "string"
         },
         "scenarios": {
           "items": {

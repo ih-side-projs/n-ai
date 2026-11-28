@@ -1,5 +1,4 @@
 """SCH-1 `nai run` command line, and the WP1 hooks it relies on (terminal sinks, lazy subcommand loading)."""
-import json
 import os
 import subprocess
 import sys
@@ -10,7 +9,7 @@ from fake_store import FakeStore
 from sched_helpers import ROOT, noop
 
 from nai import terminal
-from nai.sched import JobResult, read_health
+from nai.sched import read_health
 from nai.sched.cli import main
 
 
@@ -130,7 +129,8 @@ sys.exit(rc)
 # ------------------------------------------------------------------------------------ WP1 hooks
 def test_WP1_terminal_sink_gets_lines_with_the_thread_context():
     got = []
-    sink = lambda tag, text, color, ctx: got.append((tag, text, color, ctx))
+    def sink(tag, text, color, ctx):
+        return got.append((tag, text, color, ctx))
     terminal.add_sink(sink)
     try:
         terminal.log("a", "outside")
@@ -140,7 +140,8 @@ def test_WP1_terminal_sink_gets_lines_with_the_thread_context():
                 terminal.log("c", "nested")
             terminal.log("d", "back")
         t = threading.Thread(target=lambda: terminal.log("e", "other thread"))
-        t.start(); t.join()
+        t.start()
+        t.join()
     finally:
         terminal.remove_sink(sink)
     terminal.log("f", "after removal")

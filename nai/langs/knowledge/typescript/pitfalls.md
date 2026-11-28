@@ -1,0 +1,13 @@
+- `throw new Error("not implemented")` is deliberate in stubs; remove it when implementing.
+- Do not edit `package.json`, `tsconfig.json` or `src/entities.ts`; the adapter regenerates them.
+- `tsc --noEmit` runs as the build; a type error is a BUILD_ERROR, not a test failure.
+- `strict` is on: `null`/`undefined` are not assignable to non-optional types.
+- `any` hides errors; use `unknown` plus a type guard.
+- `Array.prototype.sort` mutates and sorts lexicographically by default; pass a comparator.
+- `0.1 + 0.2 !== 0.3`; compare with a tolerance.
+- `==` coerces; use `===`.
+- `for...in` iterates keys (including inherited); use `for...of` or `Object.entries`.
+- `JSON.parse` returns `any`; validate the shape before using it.
+- `import type` keeps type-only imports out of the runtime graph.
+- ESM: relative imports need the `.js` extension in the generated `tsconfig`.
+- Platform: `any`/`linux` components may not import UI frameworks (verify fails).

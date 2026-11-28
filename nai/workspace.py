@@ -6,6 +6,7 @@ import os
 from contextlib import contextmanager
 from pathlib import Path
 
+from . import paths
 from .gate import IGNORE, VerificationGate
 from .gitcp import GitCheckpoint
 from .policy import JobContext, PathPolicy
@@ -17,7 +18,8 @@ FILE_TOOL_NAMES = {"read_file", "write_file", "edit_file", "list_files", "run_co
 
 class Workspace:
     def __init__(self, root: Path, cmd_timeout: int = 600, docker_image: str | None = None, git: bool = True,
-                 test_cmds: list[str] | None = None, gate: bool = True, extra_env: dict[str, str] | None = None):
+                 test_cmds: list[str] | None = None, gate: bool = True, extra_env: dict[str, str] | None = None,
+                 on_note=None):
         self.root = Path(root).resolve()
         self.root.mkdir(parents=True, exist_ok=True)
         (self.root / ".agent").mkdir(exist_ok=True)
@@ -26,12 +28,20 @@ class Workspace:
         self.test_cmds: list[str] = test_cmds or []   # must pass before finish(success); empty = auto-detect
         self.gate = VerificationGate(self.root, self.test_cmds, enabled=gate)
         self.gitcp = GitCheckpoint(self.root, enabled=git)
-        self.runner = CommandRunner(self.root, cmd_timeout, docker_image, self.gate, extra_env=extra_env)
+        # ``on_note`` records execution-target warnings (e.g. weaker isolation
+        # when ``unshare -rn`` is unavailable) in the event log.
+        self.runner = CommandRunner(self.root, cmd_timeout, docker_image, self.gate,
+                                    extra_env=extra_env, on_note=on_note)
         self.job: JobContext | None = None
 
     @property
     def container(self) -> str | None:
         return self.runner.container
+
+    @property
+    def exec_target(self):
+        """The :class:`nai.exec.ExecutionTarget` every command goes through."""
+        return self.runner.target
 
     # -- per-job context (CORE-3/4/5) ------------------------------------------
     @contextmanager
@@ -74,10 +84,10 @@ class Workspace:
                 rel = "."
             elif rel.startswith("/work/"):
                 rel = rel[len("/work/"):].lstrip("/") or "."
-        p = (self.root / rel).resolve()
-        if p != self.root and self.root not in p.parents:
-            raise ValueError(f"path escapes workspace: {rel}")
-        return p
+        try:
+            return paths.resolve_within(self.root, self.root / rel)
+        except paths.LayoutError as exc:
+            raise ValueError(f"path escapes workspace: {rel}") from exc
 
     def _rel(self, p: Path) -> str:
         return p.relative_to(self.root).as_posix()
@@ -153,6 +163,21 @@ class Workspace:
     def run_command(self, command, timeout_seconds=None):
         # `scope` is deliberately not a parameter: tool arguments come from the model.
         return self.runner.run_command(command, timeout_seconds, scope=self._scope())
+
+    def run_argv(self, argv, timeout_seconds=None, *, phase="run", env_overrides=None, network=None,
+                 cwd=None, output_cap=None, cancel_event=None):
+        """Run argv through the execution target (pipeline steps use this)."""
+        return self.runner.run_argv(
+            argv,
+            timeout_seconds=timeout_seconds,
+            scope=self._scope(),
+            phase=phase,
+            env_overrides=env_overrides,
+            network=network,
+            cwd=cwd,
+            output_cap=output_cap,
+            cancel_event=cancel_event,
+        )
 
     def files_block(self, files, missing: str = "(file does not exist)") -> str:
         """Context-file text for prompts: `### path` plus a fenced block, each cut at 20000 characters."""
